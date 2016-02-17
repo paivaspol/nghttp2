@@ -538,7 +538,13 @@ typedef enum {
    * callbacks because the library processes this frame type and its
    * preceding HEADERS/PUSH_PROMISE as a single frame.
    */
-  NGHTTP2_CONTINUATION = 0x09
+  NGHTTP2_CONTINUATION = 0x09,
+  /**
+   * Extension to HTTP/2.
+   * The DEPENDENCY frame. It is used to specify the dependency that
+   * will be discovered in the future.
+   */
+  EXT_DEPENDENCY = 0x10
 } nghttp2_frame_type;
 
 /**
