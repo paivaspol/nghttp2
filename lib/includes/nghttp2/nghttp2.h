@@ -1113,6 +1113,26 @@ typedef struct {
 /**
  * @struct
  *
+ * The DEPENDENCY frame. It has the following members:
+ */
+typedef struct {
+  /**
+   * The frame header.
+   */
+  nghttp2_frame_hd hd;
+  /**
+   * The pointer to extension payload.  The exact pointer type is
+   * determined by hd.type.
+   *
+   * Currently, no extension is supported.  This is a place holder for
+   * the future extensions.
+   */
+  void *payload;
+} ext_dependency;
+
+/**
+ * @struct
+ *
  * The extension frame.  It has following members:
  */
 typedef struct {
@@ -1178,6 +1198,10 @@ typedef union {
    * The WINDOW_UPDATE frame.
    */
   nghttp2_window_update window_update;
+  /**
+   * The DEPENDENCY frame. (Extension)
+   */
+  ext_dependency dependency;
   /**
    * The extension frame.
    */

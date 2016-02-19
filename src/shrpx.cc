@@ -66,6 +66,10 @@
 #include <initializer_list>
 #include <random>
 
+// ADDITIONAL
+#include <deque>
+// END ADDITIONAL
+
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <ev.h>
@@ -85,6 +89,7 @@
 #include "app_helper.h"
 #include "ssl.h"
 #include "template.h"
+#include "dep_reader.h"
 
 extern char **environ;
 
@@ -2234,6 +2239,12 @@ void process_options(
 
 int main(int argc, char **argv) {
   nghttp2::ssl::libssl_init();
+  DependencyReader depReader;
+  depReader.hello_world();
+  std::deque<std::string> deps = depReader.ReadDependencies();
+  std::cout << "len: " << deps.size() << std::endl;
+  for (std::deque<std::string>::const_iterator i = deps.begin(); i != deps.end(); ++i)
+    std::cout << *i << std::endl;
 
 #ifndef NOTHREADS
   nghttp2::ssl::LibsslGlobalLock lock;

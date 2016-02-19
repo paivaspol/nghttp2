@@ -517,6 +517,35 @@ int nghttp2_submit_data(nghttp2_session *session, uint8_t flags,
   return 0;
 }
 
+int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
+                             int32_t stream_id,
+                             const nghttp2_data_provider *data_prd) {
+  int rv;
+  nghttp2_outbound_item *item;
+  nghttp2_frame *frame;
+  nghttp2_mem *mem;
+
+  if (stream_id == 0) {
+    return NGHTTP2_ERR_INVALID_ARGUMENT;
+  }
+
+  item = nghttp2_mem_malloc(mem, sizeof(nghttp2_outbound_item));
+  if (item == NULL) {
+    return NGHTTP2_ERR_NOMEM;
+  }
+
+  nghttp2_outbound_item_init(item);
+
+  frame = &item->frame;
+  rv = nghttp2_session_add_item(session, item);
+  if (rv != 0) {
+    ext_frame_dependency_free(&frame->data);
+    nghttp2_mem_free(mem, item);
+    return rv;
+  }
+  return rv;
+}
+
 ssize_t nghttp2_pack_settings_payload(uint8_t *buf, size_t buflen,
                                       const nghttp2_settings_entry *iv,
                                       size_t niv) {

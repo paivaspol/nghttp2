@@ -1763,7 +1763,9 @@ static int session_prep_frame(nghttp2_session *session,
   mem = &session->mem;
   frame = &item->frame;
 
-  if (frame->hd.type != NGHTTP2_DATA) {
+  if (!(frame->hd.type == NGHTTP2_DATA || 
+        /* Extension */
+        frame->hd.type == EXT_DEPENDENCY)) {
     switch (frame->hd.type) {
     case NGHTTP2_HEADERS: {
       nghttp2_headers_aux_data *aux_data;
@@ -1992,6 +1994,33 @@ static int session_prep_frame(nghttp2_session *session,
       return NGHTTP2_ERR_INVALID_ARGUMENT;
     }
     return 0;
+  /*} else if (frame->hd.type == EXT_DEPENDENCY) { /* Extension
+    size_t next_readmax;
+    nghttp2_stream *stream;
+
+    stream = nghttp2_session_get_stream(session, frame->hd.stream_id);
+
+    if (stream) {
+      assert(stream->item == item);
+    }
+
+    rv = nghttp2_session_predicate_data_send(session, stream);
+    if (rv != 0) {
+      // If stream was already closed, nghttp2_session_get_stream()
+      // returns NULL, but item is still attached to the stream.
+      // Search stream including closed again.
+      stream = nghttp2_session_get_stream_raw(session, frame->hd.stream_id);
+      if (stream) {
+        int rv2;
+        rv2 = nghttp2_stream_detach_item(stream);
+
+        if (nghttp2_is_fatal(rv2)) {
+          return rv2;
+        }
+      }
+      return rv;
+    }
+    // LAST PLACE*/
   } else {
     size_t next_readmax;
     nghttp2_stream *stream;
@@ -5226,6 +5255,9 @@ ssize_t nghttp2_session_mem_recv(nghttp2_session *session, const uint8_t *in,
         iframe->state = NGHTTP2_IB_IGN_PAYLOAD;
 
         break;
+      case EXT_DEPENDENCY:
+        DEBUGF(fprintf(stderr, "recv: EXT DEPENDENCY\n"));
+        // Fall through for now.
       default:
         DEBUGF(fprintf(stderr, "recv: unknown frame\n"));
 
@@ -6269,6 +6301,14 @@ int nghttp2_session_add_settings(nghttp2_session *session, uint8_t flags,
 
   return 0;
 }
+
+int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
+                              size_t datamax, nghttp2_frame *frame,
+                              nghttp2_data_aux_data *aux_data,
+                              nghttp2_stream *stream) {
+
+}
+
 
 int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
                               size_t datamax, nghttp2_frame *frame,

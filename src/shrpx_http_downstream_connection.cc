@@ -24,6 +24,9 @@
  */
 #include "shrpx_http_downstream_connection.h"
 
+// ADDITIONAL
+#include <iostream>
+
 #include "shrpx_client_handler.h"
 #include "shrpx_upstream.h"
 #include "shrpx_downstream.h"
@@ -633,6 +636,10 @@ int htp_hdrs_completecb(http_parser *htp) {
 
   // TODO It seems that the cases other than HEAD are handled by
   // http-parser.  Need test.
+  
+  // ADDITIONAL
+  std::cout << "Done with Request header." << std::endl;
+
   return req.method == HTTP_HEAD || (100 <= status && status <= 199) ||
                  status == 204 || status == 304
              ? 1

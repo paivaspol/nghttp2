@@ -1722,6 +1722,10 @@ int on_header_callback(nghttp2_session *session, const nghttp2_frame *frame,
                                flags, user_data);
   }
 
+  // ADDITIONAL
+  std::cout << "on header callback" << std::endl;
+  // END ADDITIONAL
+
   switch (frame->hd.type) {
   case NGHTTP2_HEADERS: {
     auto req = static_cast<Request *>(

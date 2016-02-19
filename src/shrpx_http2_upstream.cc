@@ -29,6 +29,10 @@
 #include <cerrno>
 #include <sstream>
 
+// ADDITIONAL
+#include <iostream>
+// END ADDITIONAL
+
 #include "shrpx_client_handler.h"
 #include "shrpx_https_upstream.h"
 #include "shrpx_downstream.h"
@@ -1500,6 +1504,11 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     ULOG(FATAL, this) << "nghttp2_submit_response() failed";
     return -1;
   }
+
+  // ADDITIONAL
+  std::cout << "submitted response" << std::endl;
+  // Find out whether we have dependencies. If we do, dump it here.
+  // END ADDITIONAL
 
   return 0;
 }

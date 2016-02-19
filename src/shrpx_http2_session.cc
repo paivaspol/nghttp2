@@ -31,6 +31,9 @@
 
 #include <vector>
 
+// ADDITIONAL
+#include <iostream>
+
 #include <openssl/err.h>
 
 #include "shrpx_upstream.h"
@@ -889,6 +892,10 @@ int on_response_headers(Http2Session *http2session, Downstream *downstream,
                                       NGHTTP2_PROTOCOL_ERROR);
       downstream->set_response_state(Downstream::MSG_RESET);
     }
+  
+    // ADDITIONAL
+    std::cout << "Sent Header " << resp.http_status << std::endl;
+    // END ADDITIONAL
 
     return 0;
   }
@@ -945,6 +952,10 @@ int on_response_headers(Http2Session *http2session, Downstream *downstream,
       downstream->set_response_state(Downstream::MSG_RESET);
     }
   }
+  
+  // ADDITIONAL
+  std::cout << "Sent Header " << std::endl;
+  // END ADDITIONAL
 
   return 0;
 }

@@ -184,6 +184,15 @@ void nghttp2_frame_data_init(nghttp2_data *frame, uint8_t flags,
 
 void nghttp2_frame_data_free(nghttp2_data *frame _U_) {}
 
+void ext_frame_dependency_init(ext_dependency *frame, uint8_t flags,
+                               int32_t stream_id) {
+  /* This design is similar to that of DATA frame. Frame size is still unknown. */
+  nghttp2_frame_hd_init(&frame->hd, 0, EXT_DEPENDENCY, flags, stream_id);
+
+}
+
+void ext_frame_dependency_free(ext_dependency *frame _U_) {}
+
 size_t nghttp2_frame_priority_len(uint8_t flags) {
   if (flags & NGHTTP2_FLAG_PRIORITY) {
     return NGHTTP2_PRIORITY_SPECLEN;

@@ -453,6 +453,14 @@ void nghttp2_frame_data_init(nghttp2_data *frame, uint8_t flags,
 void nghttp2_frame_data_free(nghttp2_data *frame);
 
 /*
+ * Extension DEPENDENCY frame type initialization and free.
+ */
+void ext_frame_dependency_init(ext_dependency *frame, uint8_t flags,
+                               int32_t stream_id);
+
+void ext_frame_dependency_free(ext_dependency *frame);
+
+/*
  * Makes copy of |iv| and return the copy. The |niv| is the number of
  * entries in |iv|. This function returns the pointer to the copy if
  * it succeeds, or NULL.
