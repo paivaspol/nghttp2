@@ -765,6 +765,19 @@ typedef enum {
   NGHTTP2_DATA_FLAG_NO_COPY = 0x04
 } nghttp2_data_flag;
 
+typedef enum {
+  /**
+   * No flag set.
+   */
+  EXT_DEPENDENCY_FLAG_NONE = 0,
+  /**
+   * Indicates the initialization of the dependency stream.
+   * The |dependency_stream_id| should be set to the desired
+   * stream id to use for exchanging the dependencies.
+   */
+  EXT_DEPENDENCY_FLAG_INIT = 0x1
+} ext_dependency_flag;
+
 /**
  * @functypedef
  *
@@ -1120,12 +1133,16 @@ typedef struct {
    * The frame header.
    */
   nghttp2_frame_hd hd;
-
   /**
    *  The number of dependencies within the payload. 
    */
-  uint16_t num_dependencies;
-
+  size_t num_dependencies;
+  /**
+   * The ID of the stream in which the depedency frames are being sent.
+   * This should differ to the stream ID in the header, if INIT flag is set.
+   * If INIT flag is not set, this field should be set to 0.
+   */
+  int32_t dependency_stream_id;
   /**
    * The pointer to the dependencies. The dependencies are delimited by
    * '\n' character. Furthermore, the number of dependencies after tokenization 
