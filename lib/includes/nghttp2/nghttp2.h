@@ -1120,12 +1120,16 @@ typedef struct {
    * The frame header.
    */
   nghttp2_frame_hd hd;
+
   /**
-   * The pointer to extension payload.  The exact pointer type is
-   * determined by hd.type.
-   *
-   * Currently, no extension is supported.  This is a place holder for
-   * the future extensions.
+   *  The number of dependencies within the payload. 
+   */
+  uint16_t num_dependencies;
+
+  /**
+   * The pointer to the dependencies. The dependencies are delimited by
+   * '\n' character. Furthermore, the number of dependencies after tokenization 
+   * must be equal to |num_depdencies|.
    */
   void *payload;
 } ext_dependency;
