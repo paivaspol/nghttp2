@@ -27,6 +27,11 @@ public:
    * Returns a nghttp2_data_provider containing the dependencies.
    */
   nghttp2_data_provider GetDependenciesDataProvider();
+
+  /*
+   * Returns the size of the dependencies.
+   */
+  size_t GetDependenciesRaw(uint8_t *buf);
 };
 
 ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
