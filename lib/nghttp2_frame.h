@@ -456,7 +456,8 @@ void nghttp2_frame_data_free(nghttp2_data *frame);
  * Extension DEPENDENCY frame type initialization and free.
  */
 void ext_frame_dependency_init(ext_dependency *frame, uint8_t flags,
-                               int32_t stream_id);
+                               int32_t stream_id,
+                               int32_t dependency_stream_id);
 
 void ext_frame_dependency_free(ext_dependency *frame);
 

@@ -27,6 +27,10 @@
 #include <string.h>
 #include <assert.h>
 
+// ADDITIONAL
+#include <stdio.h>
+// END ADDITIONAL
+
 #include "nghttp2_session.h"
 #include "nghttp2_frame.h"
 #include "nghttp2_helper.h"
@@ -517,34 +521,67 @@ int nghttp2_submit_data(nghttp2_session *session, uint8_t flags,
   return 0;
 }
 
+// ADDITIONAL
 int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
                              int32_t stream_id,
                              const nghttp2_data_provider *data_prd) {
-  int rv;
   nghttp2_outbound_item *item;
   nghttp2_frame *frame;
   nghttp2_mem *mem;
+  int rv;
+  int32_t dependency_stream_id;
 
-  if (stream_id == 0) {
+  mem = &session->mem;
+
+  printf("[nghttp2_submit] submitting dependency.\n");
+
+  if (stream_id <= 0 || nghttp2_session_is_my_stream_id(session, stream_id)) {
     return NGHTTP2_ERR_INVALID_ARGUMENT;
   }
 
+  printf("[nghttp2_submit] (1)\n");
+
+  /* All 32bit signed stream IDs are spent. */
+  if (session->next_stream_id > INT32_MAX) {
+    return NGHTTP2_ERR_STREAM_ID_NOT_AVAILABLE;
+  }
+
+  printf("[nghttp2_submit] (2)\n");
+
   item = nghttp2_mem_malloc(mem, sizeof(nghttp2_outbound_item));
   if (item == NULL) {
+    printf("[nghttp2_submit] (1) err\n");
     return NGHTTP2_ERR_NOMEM;
   }
 
+  printf("[nghttp2_submit] (3)\n");
+
   nghttp2_outbound_item_init(item);
 
+  printf("[nghttp2_submit] (4)\n");
+
+  /* TODO: this is weird.. May be this data provider is just the
+   * data provider of the auxilary data. */
+  item->aux_data.data.data_prd = *data_prd;
+
+  /* Get the next stream id and advance the next stream id. */
+  dependency_stream_id = (int32_t) session->next_stream_id;
+  session->next_stream_id += 2;
+
   frame = &item->frame;
+
+  ext_frame_dependency_init(&frame->dependency, flags, stream_id, dependency_stream_id);
   rv = nghttp2_session_add_item(session, item);
   if (rv != 0) {
-    ext_frame_dependency_free(&frame->data);
+    ext_frame_dependency_free(&frame->dependency);
     nghttp2_mem_free(mem, item);
     return rv;
   }
-  return rv;
+  session->has_opened_dependency_stream = 1;
+  printf("[nghttp2_submit] (5)\n");
+  return dependency_stream_id;
 }
+// END ADDITIONAL
 
 ssize_t nghttp2_pack_settings_payload(uint8_t *buf, size_t buflen,
                                       const nghttp2_settings_entry *iv,

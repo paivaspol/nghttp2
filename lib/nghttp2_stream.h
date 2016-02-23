@@ -90,7 +90,12 @@ typedef enum {
   NGHTTP2_STREAM_FLAG_DEFERRED_USER = 0x08,
   /* bitwise OR of NGHTTP2_STREAM_FLAG_DEFERRED_FLOW_CONTROL and
      NGHTTP2_STREAM_FLAG_DEFERRED_USER. */
-  NGHTTP2_STREAM_FLAG_DEFERRED_ALL = 0x0c
+  NGHTTP2_STREAM_FLAG_DEFERRED_ALL = 0x0c,
+  // ADDITIONAL
+  /* Indicates that this stream is a dependency stream and not 
+     opened yet. */
+  NGHTTP2_STREAM_FLAG_EXT_DEPENDENCY = 0x10
+  // END ADDITIONAL
 
 } nghttp2_stream_flag;
 

@@ -771,12 +771,11 @@ typedef enum {
    */
   EXT_DEPENDENCY_FLAG_NONE = 0,
   /**
-   * Indicates the initialization of the dependency stream.
-   * The |dependency_stream_id| should be set to the desired
-   * stream id to use for exchanging the dependencies.
+   * Indicates that this dependency frame is the first frame.
+   * Stream initialization should happen with this frame.
    */
-  EXT_DEPENDENCY_FLAG_INIT = 0x1
-} ext_dependency_flag;
+  EXT_DEPENDENCY_FLAG_INIT = 0x01
+} nghttp2_dependency_flag;
 
 /**
  * @functypedef
@@ -4475,6 +4474,26 @@ NGHTTP2_EXTERN int32_t nghttp2_stream_get_weight(nghttp2_stream *stream);
  */
 NGHTTP2_EXTERN int32_t
 nghttp2_stream_get_sum_dependency_weight(nghttp2_stream *stream);
+
+// ADDITIONAL
+/**
+ * @function
+ *
+ * Returns whether the session already has a dependency stream.
+ */
+NGHTTP2_EXTERN int 
+nghttp2_session_has_open_dependency_stream(nghttp2_session *session);
+
+/**
+ * @function
+ *
+ * Submits a dependency frame to the specified Stream ID.
+ */
+NGHTTP2_EXTERN int
+nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
+                             int32_t stream_id,
+                             const nghttp2_data_provider *data_prd);
+// END ADDITIONAL
 
 #ifdef __cplusplus
 }

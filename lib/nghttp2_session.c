@@ -762,6 +762,42 @@ int nghttp2_session_add_item(nghttp2_session *session,
 
       break;
     }
+    // ADDITIONAL handle the case for EXT_DEPENDENCY frame type.
+    case EXT_DEPENDENCY: {
+      /* TODO: Figure out about the aux data in this case.
+       * Guess: It should be the pointer to the data provider or sth.
+       */
+      nghttp2_headers_aux_data *aux_data;
+      nghttp2_priority_spec pri_spec;
+
+      aux_data = &item->aux_data.headers;
+
+      if (!stream) {
+        printf("[nghttp2_session] EXT_DEPENDENCY stream closed\n");
+        return NGHTTP2_ERR_STREAM_CLOSED;
+      }
+      
+      /* 
+       * Initialize the prioriy for this stream. Set it to 
+       * MAX_WEIGHT so that this always get a higher priority than that of other frames.
+       */
+      nghttp2_priority_spec_init(&pri_spec, stream->stream_id,
+                                 NGHTTP2_MAX_WEIGHT, 0);
+
+      if (!nghttp2_session_open_stream(
+            session, frame->dependency.dependency_stream_id,
+            NGHTTP2_STREAM_FLAG_EXT_DEPENDENCY, &pri_spec, NGHTTP2_STREAM_OPENED,
+            aux_data->stream_user_data)) {
+        printf("[nghttp2_session] EXT_DEPENDENCY failed to open a stream!\n");
+        return NGHTTP2_ERR_NOMEM;
+      }
+      
+      /* Add the item to the outbound queue and set the item |queued| property to true */
+      nghttp2_outbound_queue_push(&session->ob_reg, item);
+      item->queued = 1;
+      break;
+    }
+    // END ADDITIONAL
     case NGHTTP2_WINDOW_UPDATE:
       if (stream) {
         stream->window_update_queued = 1;
@@ -1762,6 +1798,10 @@ static int session_prep_frame(nghttp2_session *session,
 
   mem = &session->mem;
   frame = &item->frame;
+  
+  // ADDITIONAL
+  printf("[nghttp2_session] preping frame\n");
+  // END ADDITIONAL
 
   if (!(frame->hd.type == NGHTTP2_DATA || 
         /* Extension */
@@ -1994,15 +2034,20 @@ static int session_prep_frame(nghttp2_session *session,
       return NGHTTP2_ERR_INVALID_ARGUMENT;
     }
     return 0;
-  /*} else if (frame->hd.type == EXT_DEPENDENCY) { /* Extension
+  } 
+  // ADDITIONAL
+  else if (frame->hd.type == EXT_DEPENDENCY) {
+    printf("[nghttp2_session] DEPENDENCY FRAME!\n");
     size_t next_readmax;
     nghttp2_stream *stream;
 
     stream = nghttp2_session_get_stream(session, frame->hd.stream_id);
 
+    /*
     if (stream) {
       assert(stream->item == item);
     }
+    */
 
     rv = nghttp2_session_predicate_data_send(session, stream);
     if (rv != 0) {
@@ -2020,8 +2065,73 @@ static int session_prep_frame(nghttp2_session *session,
       }
       return rv;
     }
-    // LAST PLACE*/
-  } else {
+
+    assert(stream);
+    next_readmax = nghttp2_session_next_data_read(session, stream);
+
+    if (next_readmax == 0) {
+
+      /* This must be true since we only pop DATA frame item from
+         queue when session->remote_window_size > 0 */
+      assert(session->remote_window_size > 0);
+
+      rv = nghttp2_stream_defer_item(stream,
+                                     NGHTTP2_STREAM_FLAG_DEFERRED_FLOW_CONTROL);
+
+      if (nghttp2_is_fatal(rv)) {
+        return rv;
+      }
+
+      session->aob.item = NULL;
+      active_outbound_item_reset(&session->aob, mem);
+      return NGHTTP2_ERR_DEFERRED;
+    }
+
+    // Pack data for the dependency frame.
+    rv = ext_session_pack_dependency(session, &session->aob.framebufs,
+                                    next_readmax, frame, &item->aux_data.data,
+                                    stream);
+
+    if (rv == NGHTTP2_ERR_DEFERRED) {
+      rv = nghttp2_stream_defer_item(stream, NGHTTP2_STREAM_FLAG_DEFERRED_USER);
+
+      if (nghttp2_is_fatal(rv)) {
+        return rv;
+      }
+
+      session->aob.item = NULL;
+      active_outbound_item_reset(&session->aob, mem);
+      return NGHTTP2_ERR_DEFERRED;
+    }
+    if (rv == NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE) {
+      rv = nghttp2_stream_detach_item(stream);
+
+      if (nghttp2_is_fatal(rv)) {
+        return rv;
+      }
+
+      rv = nghttp2_session_add_rst_stream(session, frame->hd.stream_id,
+                                          NGHTTP2_INTERNAL_ERROR);
+      if (nghttp2_is_fatal(rv)) {
+        return rv;
+      }
+      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
+    if (rv != 0) {
+      int rv2;
+
+      rv2 = nghttp2_stream_detach_item(stream);
+
+      if (nghttp2_is_fatal(rv2)) {
+        return rv2;
+      }
+
+      return rv;
+    }
+    return 0;
+  }
+  // END ADDITIONAL
+  else {
     size_t next_readmax;
     nghttp2_stream *stream;
 
@@ -2705,6 +2815,10 @@ static ssize_t nghttp2_session_mem_send_internal(nghttp2_session *session,
   mem = &session->mem;
   aob = &session->aob;
   framebufs = &aob->framebufs;
+
+  // ADDITIONAL
+  printf("[nghttp2_session] sending...\n");
+  // END ADDITIONAL
 
   /* We may have idle streams more than we expect (e.g.,
      nghttp2_session_change_stream_priority() or
@@ -6306,9 +6420,93 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
                               size_t datamax, nghttp2_frame *frame,
                               nghttp2_data_aux_data *aux_data,
                               nghttp2_stream *stream) {
+  int rv;
+  uint32_t data_flags;
+  ssize_t payloadlen;
+  ssize_t padded_payloadlen;
+  nghttp2_buf *buf;
+  size_t max_payloadlen;
 
+  assert(bufs->head == bufs->cur);
+
+  buf = &bufs->cur->buf;
+
+  if (session->callbacks.read_length_callback) {
+
+    payloadlen = session->callbacks.read_length_callback(
+        session, frame->hd.type, stream->stream_id, session->remote_window_size,
+        stream->remote_window_size, session->remote_settings.max_frame_size,
+        session->user_data);
+
+    DEBUGF(fprintf(stderr, "send: read_length_callback=%zd\n", payloadlen));
+
+    payloadlen = nghttp2_session_enforce_flow_control_limits(session, stream,
+                                                             payloadlen);
+
+    DEBUGF(fprintf(stderr,
+                   "send: read_length_callback after flow control=%zd\n",
+                   payloadlen));
+
+    if (payloadlen <= 0) {
+      return NGHTTP2_ERR_CALLBACK_FAILURE;
+    }
+
+    if ((size_t)payloadlen > nghttp2_buf_avail(buf)) {
+      /* Resize the current buffer(s).  The reason why we do +1 for
+         buffer size is for possible padding field. */
+      rv = nghttp2_bufs_realloc(&session->aob.framebufs,
+                                (size_t)(NGHTTP2_FRAME_HDLEN + 1 + payloadlen));
+
+      if (rv != 0) {
+        DEBUGF(fprintf(stderr, "send: realloc buffer failed rv=%d", rv));
+        /* If reallocation failed, old buffers are still in tact.  So
+           use safe limit. */
+        payloadlen = (ssize_t)datamax;
+
+        DEBUGF(
+            fprintf(stderr, "send: use safe limit payloadlen=%zd", payloadlen));
+      } else {
+        assert(&session->aob.framebufs == bufs);
+
+        buf = &bufs->cur->buf;
+      }
+    }
+    datamax = (size_t)payloadlen;
+  }
+
+  /* Current max DATA length is less then buffer chunk size */
+  assert(nghttp2_buf_avail(buf) >= datamax);
+
+  data_flags = NGHTTP2_DATA_FLAG_NONE;
+  payloadlen = aux_data->data_prd.read_callback(
+      session, frame->hd.stream_id, buf->pos, datamax, &data_flags,
+      &aux_data->data_prd.source, session->user_data);
+
+  if (payloadlen == NGHTTP2_ERR_DEFERRED ||
+      payloadlen == NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE) {
+    DEBUGF(fprintf(stderr, "send: DATA postponed due to %s\n",
+                   nghttp2_strerror((int)payloadlen)));
+
+    return (int)payloadlen;
+  }
+
+  if (payloadlen < 0 || datamax < (size_t)payloadlen) {
+    /* This is the error code when callback is failed. */
+    return NGHTTP2_ERR_CALLBACK_FAILURE;
+  }
+
+  buf->last = buf->pos + payloadlen;
+  buf->pos -= NGHTTP2_FRAME_HDLEN;
+
+  /* Clear flags, because this may contain previous flags of previous
+     DATA */
+  frame->hd.flags = NGHTTP2_FLAG_NONE;
+  nghttp2_frame_pack_frame_hd(buf->pos, &frame->hd);
+
+  reschedule_stream(stream);
+
+  return 0;
 }
-
 
 int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
                               size_t datamax, nghttp2_frame *frame,
@@ -6893,3 +7091,9 @@ int nghttp2_session_create_idle_stream(nghttp2_session *session,
      called. */
   return 0;
 }
+
+// ADDITIONAL
+int nghttp2_session_has_open_dependency_stream(nghttp2_session *session) {
+  return session->has_opened_dependency_stream;
+}
+// END ADDITIONAL

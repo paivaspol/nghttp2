@@ -304,6 +304,11 @@ struct nghttp2_session {
      this session.  The nonzero does not necessarily mean
      WINDOW_UPDATE is not queued. */
   uint8_t window_update_queued;
+  // ADDITIONAL
+  /* This flag is used to indicate whether a dependency stream has been
+   * opened or not. */
+  uint8_t has_opened_dependency_stream;
+  // END ADDITIONAL
 };
 
 /* Struct used when updating initial window size of each active
@@ -332,6 +337,13 @@ typedef struct {
  */
 int nghttp2_session_is_my_stream_id(nghttp2_session *session,
                                     int32_t stream_id);
+
+// ADDITIONAL
+/*
+ * Returns whether the session already has a dependency stream.
+ */
+int nghttp2_session_has_open_dependency_stream(nghttp2_session *session);
+// END ADDITIONAL
 
 /*
  * Adds |item| to the outbound queue in |session|.  When this function
@@ -760,6 +772,30 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
                               nghttp2_data_aux_data *aux_data,
                               nghttp2_stream *stream);
 
+// ADDITIONAL
+/*
+ * Packs DEPENDENCY frame |frame| in wire frame format and stores it in
+ * |bufs|.  Payload will be read using |aux_data->data_prd|.  The
+ * length of payload is at most |datamax| bytes.
+ *
+ * This function returns 0 if it succeeds, or one of the following
+ * negative error codes:
+ *
+ * NGHTTP2_ERR_DEFERRED
+ *     The DATA frame is postponed.
+ * NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE
+ *     The read_callback failed (stream error).
+ * NGHTTP2_ERR_NOMEM
+ *     Out of memory.
+ * NGHTTP2_ERR_CALLBACK_FAILURE
+ *     The read_callback failed (session error).
+ */
+int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
+                              size_t datamax, nghttp2_frame *frame,
+                              nghttp2_data_aux_data *aux_data,
+                              nghttp2_stream *stream);
+// END ADDITIONAL
+
 /*
  * Pops and returns next item to send.  If there is no such item,
  * returns NULL.  This function takes into account max concurrent
@@ -833,5 +869,6 @@ int nghttp2_session_reprioritize_stream(nghttp2_session *session,
 int nghttp2_session_terminate_session_with_reason(nghttp2_session *session,
                                                   uint32_t error_code,
                                                   const char *reason);
+
 
 #endif /* NGHTTP2_SESSION_H */
