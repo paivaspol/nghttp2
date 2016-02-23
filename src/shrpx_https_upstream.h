@@ -57,6 +57,8 @@ public:
   virtual int downstream_eof(DownstreamConnection *dconn);
   virtual int downstream_error(DownstreamConnection *dconn, int events);
 
+  virtual int on_dependency_received();
+
   void attach_downstream(std::unique_ptr<Downstream> downstream);
   void delete_downstream();
   Downstream *get_downstream() const;

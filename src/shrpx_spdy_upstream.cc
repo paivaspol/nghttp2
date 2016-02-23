@@ -1274,6 +1274,12 @@ int SpdyUpstream::on_downstream_push_promise_complete(
   return -1;
 }
 
+// ADDITIONAL
+int SpdyUpstream::on_dependency_received() {
+  return -1;
+}
+// END ADDITIONAL
+
 bool SpdyUpstream::push_enabled() const { return false; }
 
 void SpdyUpstream::cancel_premature_downstream(

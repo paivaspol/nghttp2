@@ -37,6 +37,7 @@
 #include "shrpx_downstream_queue.h"
 #include "memchunk.h"
 #include "buffer.h"
+#include "dep_reader.h"
 
 using namespace nghttp2;
 
@@ -60,6 +61,10 @@ public:
   virtual int downstream_write(DownstreamConnection *dconn);
   virtual int downstream_eof(DownstreamConnection *dconn);
   virtual int downstream_error(DownstreamConnection *dconn, int events);
+
+  // ADDITIONAL
+  virtual int on_dependency_received();
+  // END ADDITIONAL
 
   void add_pending_downstream(std::unique_ptr<Downstream> downstream);
   void remove_downstream(Downstream *downstream);
@@ -135,6 +140,7 @@ private:
   nghttp2_session *session_;
   bool flow_control_;
   bool shutdown_handled_;
+  DependencyReader depReader_;
 };
 
 nghttp2_session_callbacks *create_http2_upstream_callbacks();

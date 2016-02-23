@@ -639,6 +639,7 @@ int htp_hdrs_completecb(http_parser *htp) {
   
   // ADDITIONAL
   std::cout << "Done with Request header." << std::endl;
+  // END ADDITIONAL
 
   return req.method == HTTP_HEAD || (100 <= status && status <= 199) ||
                  status == 204 || status == 304

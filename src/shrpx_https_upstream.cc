@@ -1191,6 +1191,12 @@ int HttpsUpstream::on_downstream_push_promise_complete(
   return -1;
 }
 
+// ADDITIONAL
+int HttpsUpstream::on_dependency_received() {
+  return -1; // Not supported.
+}
+// END ADDITIONAL
+
 bool HttpsUpstream::push_enabled() const { return false; }
 
 void HttpsUpstream::cancel_premature_downstream(

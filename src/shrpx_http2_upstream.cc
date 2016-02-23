@@ -404,6 +404,10 @@ void Http2Upstream::initiate_downstream(Downstream *downstream) {
 
   downstream_queue_.mark_active(downstream);
 
+  // ADDITIONAL
+  std::cout << "[shrpx_http2_upstream] Connected to downstream" << std::endl;
+  // END ADDITIONAL
+
   return;
 }
 
@@ -1120,6 +1124,15 @@ int Http2Upstream::downstream_error(DownstreamConnection *dconn, int events) {
   return 0;
 }
 
+// ADDITIONAL
+/*
+ * Called when at least one dependency is found.
+ */
+int Http2Upstream::on_dependency_received() {
+  return -1;
+}
+// END ADDITIONAL
+
 int Http2Upstream::rst_stream(Downstream *downstream, uint32_t error_code) {
   if (LOG_ENABLED(INFO)) {
     ULOG(INFO, this) << "RST_STREAM stream_id=" << downstream->get_stream_id()
@@ -1497,6 +1510,17 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
       // Continue to send response even if push was failed.
     }
   }
+  
+  // ADDITIONAL
+  // Prepare the stream for DEPENDENCY frames.
+  if (!nghttp2_session_has_open_dependency_stream(session_)) {
+    // Open the dependency stream.
+    if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
+        downstream->get_stream_id(), data_prdptr) == 0) {
+    }
+  }
+
+  // END ADDITIONAL
 
   rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
                                nva.data(), nva.size(), data_prdptr);

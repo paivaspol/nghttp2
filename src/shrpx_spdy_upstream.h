@@ -56,6 +56,11 @@ public:
   virtual int downstream_write(DownstreamConnection *dconn);
   virtual int downstream_eof(DownstreamConnection *dconn);
   virtual int downstream_error(DownstreamConnection *dconn, int events);
+
+  // ADDITIONAL
+  virtual int on_dependency_received();
+  // END ADDITIONAL
+
   Downstream *add_pending_downstream(int32_t stream_id);
   void remove_downstream(Downstream *downstream);
 

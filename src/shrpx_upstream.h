@@ -56,6 +56,12 @@ public:
                                  size_t len, bool flush) = 0;
   virtual int on_downstream_body_complete(Downstream *downstream) = 0;
 
+  // ADDITIONAL
+  // Called when a dependency is found. The upstream should send the 
+  // dependency frames to the client.
+  virtual int on_dependency_received() = 0;
+  // END ADDITIONAL
+
   virtual void on_handler_delete() = 0;
   // Called when downstream connection is reset.  Currently this is
   // only used by Http2Session.  If |no_retry| is true, another
