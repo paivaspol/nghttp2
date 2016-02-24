@@ -544,7 +544,7 @@ typedef enum {
    * The DEPENDENCY frame. It is used to specify the dependency that
    * will be discovered in the future.
    */
-  EXT_DEPENDENCY = 0x10
+  EXT_DEPENDENCY = 0x0C
 } nghttp2_frame_type;
 
 /**
