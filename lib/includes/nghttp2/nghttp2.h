@@ -608,7 +608,10 @@ typedef enum {
   /**
    * SETTINGS_MAX_HEADER_LIST_SIZE
    */
-  NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE = 0x06
+  NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE = 0x06,
+  // ADDITIONAL
+  //
+  // END ADDTIONAL
 } nghttp2_settings_id;
 /* Note: If we add SETTINGS, update the capacity of
    NGHTTP2_INBOUND_NUM_IV as well */
@@ -1135,7 +1138,7 @@ typedef struct {
   /**
    *  The number of dependencies within the payload. 
    */
-  size_t num_dependencies;
+  int32_t num_dependencies;
   /**
    * The ID of the stream in which the depedency frames are being sent.
    * This should differ to the stream ID in the header, if INIT flag is set.

@@ -21,7 +21,7 @@ public:
   /*
    * Returns a deque containing the dependencies.
    */
-  std::deque<std::string> ReadDependencies();
+  std::deque<std::string> *ReadDependencies();
 
   /*
    * Returns a nghttp2_data_provider containing the dependencies.

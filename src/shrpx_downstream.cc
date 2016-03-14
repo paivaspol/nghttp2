@@ -26,6 +26,10 @@
 
 #include <cassert>
 
+// ADDITIONAL
+#include <iostream>
+// END ADDITIONAL
+
 #include "http-parser/http_parser.h"
 
 #include "shrpx_upstream.h"
@@ -564,6 +568,8 @@ void Downstream::rewrite_location_response_header(
   if (rv != 0) {
     return;
   }
+
+  std::cout << "[shrpx_downstream.cc] uri: " << hd->value << std::endl;
 
   auto new_uri = http2::rewrite_location_uri(
       hd->value, u, request_downstream_host_, req_.authority, upstream_scheme);

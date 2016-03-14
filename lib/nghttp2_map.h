@@ -107,6 +107,12 @@ int nghttp2_map_insert(nghttp2_map *map, nghttp2_map_entry *entry);
 nghttp2_map_entry *nghttp2_map_find(nghttp2_map *map, key_type key);
 
 /*
+ * Returns an entry from the map |map|.  If there is no such
+ * entry, this function returns NULL.
+ */
+nghttp2_map_entry *nghttp2_map_get_one_entry(nghttp2_map *map);
+
+/*
  * Removes the entry associated by the key |key| from the |map|.  The
  * removed entry is not freed by this function.
  *

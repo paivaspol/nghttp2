@@ -62,10 +62,6 @@ public:
   virtual int downstream_eof(DownstreamConnection *dconn);
   virtual int downstream_error(DownstreamConnection *dconn, int events);
 
-  // ADDITIONAL
-  virtual int on_dependency_received();
-  // END ADDITIONAL
-
   void add_pending_downstream(std::unique_ptr<Downstream> downstream);
   void remove_downstream(Downstream *downstream);
 
@@ -123,6 +119,10 @@ public:
 
   int on_request_headers(Downstream *downstream, const nghttp2_frame *frame);
 
+  // ADDITIONAL
+  int on_dependency_received();
+  // END ADDITIONAL
+
   DefaultMemchunks *get_response_buf();
 
   // Changes stream priority of |downstream|, which is assumed to be a
@@ -140,7 +140,7 @@ private:
   nghttp2_session *session_;
   bool flow_control_;
   bool shutdown_handled_;
-  DependencyReader depReader_;
+  DependencyReader dep_reader_;
 };
 
 nghttp2_session_callbacks *create_http2_upstream_callbacks();

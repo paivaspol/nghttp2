@@ -742,6 +742,15 @@ int nghttp2_session_on_data_received(nghttp2_session *session,
 nghttp2_stream *nghttp2_session_get_stream(nghttp2_session *session,
                                            int32_t stream_id);
 
+
+// ADDITIONAL
+/*
+ * Returns a nghttp2_stream* object. Could be NULL if no stream is created
+ * in the session.
+ */
+nghttp2_stream *nghttp2_session_get_one_stream(nghttp2_session *session);
+// END ADDITIONAL
+
 /*
  * This function behaves like nghttp2_session_get_stream(), but it
  * returns stream object even if it is marked as closed or in

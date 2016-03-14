@@ -255,6 +255,16 @@ int on_begin_headers_callback(nghttp2_session *session,
 }
 } // namespace
 
+// ADDITIONAL
+/*
+ * Called when at least one dependency is found.
+ */
+int Http2Upstream::on_dependency_received() {
+  std::cout << "[shrpx_http2_upstream.cc] OnDependency" << std::endl;
+  return -1;
+}
+// END ADDITIONAL
+
 int Http2Upstream::on_request_headers(Downstream *downstream,
                                       const nghttp2_frame *frame) {
   if (downstream->get_response_state() == Downstream::MSG_COMPLETE) {
@@ -437,6 +447,8 @@ int on_frame_recv_callback(nghttp2_session *session, const nghttp2_frame *frame,
     return 0;
   }
   case NGHTTP2_HEADERS: {
+    std::cout << "[shrpx_http2_upstream.cc] received HEADERS" << std::endl;
+    upstream->on_dependency_received();
     auto downstream = static_cast<Downstream *>(
         nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
     if (!downstream) {
@@ -475,6 +487,15 @@ int on_frame_recv_callback(nghttp2_session *session, const nghttp2_frame *frame,
                            << ", debug_data=" << debug_data;
     }
     return 0;
+  // ADDTITIONAL
+  case EXT_DEPENDENCY:
+    std::cout << "[shrpx_http2_upstream.cc] Received Dependency" << std::endl;
+    // We have received a dependency frame from the client. This indicates that
+    // the client would like to initiate a dependency stream with us.
+    // Ensure that we create a dependency stream.
+    upstream->on_dependency_received();
+    return 0;
+  // END ADDTITIONAL
   default:
     return 0;
   }
@@ -1124,14 +1145,6 @@ int Http2Upstream::downstream_error(DownstreamConnection *dconn, int events) {
   return 0;
 }
 
-// ADDITIONAL
-/*
- * Called when at least one dependency is found.
- */
-int Http2Upstream::on_dependency_received() {
-  return -1;
-}
-// END ADDITIONAL
 
 int Http2Upstream::rst_stream(Downstream *downstream, uint32_t error_code) {
   if (LOG_ENABLED(INFO)) {
@@ -1510,17 +1523,11 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
       // Continue to send response even if push was failed.
     }
   }
-  
-  // ADDITIONAL
-  // Prepare the stream for DEPENDENCY frames.
-  if (!nghttp2_session_has_open_dependency_stream(session_)) {
-    // Open the dependency stream.
-    if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
-        downstream->get_stream_id(), data_prdptr) == 0) {
-    }
-  }
 
-  // END ADDITIONAL
+  nghttp2_data_provider dependency_data_provider = 
+                            dep_reader_.GetDependenciesDataProvider();
+  nghttp2_data_provider *dependency_data_provider_ptr = 
+                            &dependency_data_provider;
 
   rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
                                nva.data(), nva.size(), data_prdptr);
@@ -1530,7 +1537,16 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
   }
 
   // ADDITIONAL
-  std::cout << "submitted response" << std::endl;
+  std::cout << "submitted response " << std::endl;
+  // Prepare the stream for DEPENDENCY frames.
+  // Open the dependency stream.
+  if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
+      downstream->get_stream_id(), dependency_data_provider_ptr) == 0) {
+    std::cout << "submitted dependencies" << std::endl;
+  } else {
+    std::cout << "submitted dependencies failed" << std::endl;
+  }
+  // END ADDITIONAL
   // Find out whether we have dependencies. If we do, dump it here.
   // END ADDITIONAL
 

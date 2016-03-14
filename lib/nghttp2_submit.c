@@ -530,14 +530,12 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   nghttp2_mem *mem;
   int rv;
   int32_t dependency_stream_id;
+  nghttp2_stream *stream;
 
   mem = &session->mem;
 
   printf("[nghttp2_submit] submitting dependency.\n");
-
-  if (stream_id <= 0 || nghttp2_session_is_my_stream_id(session, stream_id)) {
-    return NGHTTP2_ERR_INVALID_ARGUMENT;
-  }
+  stream = nghttp2_session_get_stream(session, stream_id);
 
   printf("[nghttp2_submit] (1)\n");
 
@@ -562,23 +560,29 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
 
   /* TODO: this is weird.. May be this data provider is just the
    * data provider of the auxilary data. */
+  // item->aux_data.data.data_prd = *data_prd;
+  printf("[nghttp2_submit] item->aux_data: %d\n", item->aux_data);
+  printf("[nghttp2_submit] dereferencing data_prd\n");
+  nghttp2_data_provider data = *data_prd;
   item->aux_data.data.data_prd = *data_prd;
 
-  /* Get the next stream id and advance the next stream id. */
-  dependency_stream_id = (int32_t) session->next_stream_id;
-  session->next_stream_id += 2;
-
+  printf("[nghttp2_submit] (5)\n");
+  printf("[nghttp2_submit] (6)\n");
   frame = &item->frame;
-
-  ext_frame_dependency_init(&frame->dependency, flags, stream_id, dependency_stream_id);
+  printf("[nghttp2_submit] (7)\n");
+  
+  // TODO: Fix the dependency stream id.
+  ext_frame_dependency_init(&frame->dependency, flags, stream_id, -1);
+  printf("[nghttp2_submit] (8)\n");
   rv = nghttp2_session_add_item(session, item);
+  printf("[nghttp2_submit] (9)\n");
   if (rv != 0) {
     ext_frame_dependency_free(&frame->dependency);
     nghttp2_mem_free(mem, item);
     return rv;
   }
   session->has_opened_dependency_stream = 1;
-  printf("[nghttp2_submit] (5)\n");
+  printf("[nghttp2_submit] (10) dependency_stream_id: %d\n", -1);
   return dependency_stream_id;
 }
 // END ADDITIONAL

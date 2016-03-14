@@ -168,6 +168,17 @@ nghttp2_map_entry *nghttp2_map_find(nghttp2_map *map, key_type key) {
   return NULL;
 }
 
+nghttp2_map_entry *nghttp2_map_get_one_entry(nghttp2_map *map) {
+  uint32_t i;
+  nghttp2_map_entry *entry;
+  for (i = 0; i < map->tablelen; i++) {
+    for (entry = map->table[i]; entry; entry = entry->next) {
+      return entry;
+    }
+  }
+  return NULL;
+}
+
 int nghttp2_map_remove(nghttp2_map *map, key_type key) {
   uint32_t h;
   nghttp2_map_entry *entry, *prev;
