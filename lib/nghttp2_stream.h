@@ -224,6 +224,11 @@ struct nghttp2_stream {
      this stream.  The nonzero does not necessarily mean WINDOW_UPDATE
      is not queued. */
   uint8_t window_update_queued;
+  // ADDITIONAL
+  /* This flag is used to indicate whether the stream is expecting
+     additional dependencies from the dependency reader. */
+  uint8_t still_have_dependencies;
+  // END ADDITIONAL
 };
 
 void nghttp2_stream_init(nghttp2_stream *stream, int32_t stream_id,
@@ -437,5 +442,18 @@ void nghttp2_stream_change_weight(nghttp2_stream *stream, int32_t weight);
  */
 nghttp2_outbound_item *
 nghttp2_stream_next_outbound_item(nghttp2_stream *stream);
+
+// ADDITIONAL
+/*
+ * Sets whether the |stream| should still be expecting more dependencies.
+ */
+void nghttp2_stream_set_still_have_dependencies(nghttp2_stream *stream,
+                                                uint8_t still_have_dependencies);
+
+/*
+ * Returns whether the stream is still expecting more dependencies.
+ */
+uint8_t nghttp2_stream_still_have_dependencies(nghttp2_stream *stream);
+// END ADDITIONAL
 
 #endif /* NGHTTP2_STREAM */

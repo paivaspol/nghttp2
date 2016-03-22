@@ -803,6 +803,12 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
                               size_t datamax, nghttp2_frame *frame,
                               nghttp2_data_aux_data *aux_data,
                               nghttp2_stream *stream);
+
+/*
+ *  Returns 0 if the stream is expecting dependencies. -1 otherwise.
+ */
+int nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *session,
+                                                         int32_t stream_id);
 // END ADDITIONAL
 
 /*

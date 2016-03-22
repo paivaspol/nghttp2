@@ -577,7 +577,14 @@ typedef enum {
   /**
    * The PRIORITY flag.
    */
-  NGHTTP2_FLAG_PRIORITY = 0x20
+  NGHTTP2_FLAG_PRIORITY = 0x20,
+
+  // ADDITIONAL
+  /**
+   * The Request Dependency flag.
+   */
+  NGHTTP2_FLAG_REQUESTING_DEPENDENCIES = 0x40
+  // END ADDITIONAL
 } nghttp2_flag;
 
 /**
@@ -608,10 +615,7 @@ typedef enum {
   /**
    * SETTINGS_MAX_HEADER_LIST_SIZE
    */
-  NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE = 0x06,
-  // ADDITIONAL
-  //
-  // END ADDTIONAL
+  NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE = 0x06
 } nghttp2_settings_id;
 /* Note: If we add SETTINGS, update the capacity of
    NGHTTP2_INBOUND_NUM_IV as well */
@@ -4496,6 +4500,15 @@ NGHTTP2_EXTERN int
 nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
                              int32_t stream_id,
                              const nghttp2_data_provider *data_prd);
+
+/**
+ * @function
+ *
+ * Returns 0 if the stream is expecting dependencies. -1 otherwise.
+ */
+NGHTTP2_EXTERN int 
+nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *session,
+                                                     int32_t stream_id);
 // END ADDITIONAL
 
 #ifdef __cplusplus

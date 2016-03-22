@@ -121,6 +121,9 @@ public:
 
   // ADDITIONAL
   int on_dependency_received();
+  void on_new_dependency_callback();
+  void on_all_dependencies_discovered_callback();
+  void start_resolving_dependencies(std::string url, int32_t stream_id);
   // END ADDITIONAL
 
   DefaultMemchunks *get_response_buf();
@@ -140,7 +143,9 @@ private:
   nghttp2_session *session_;
   bool flow_control_;
   bool shutdown_handled_;
+  // ADDITIONAL
   DependencyReader dep_reader_;
+  // END ADDITIONAL
 };
 
 nghttp2_session_callbacks *create_http2_upstream_callbacks();

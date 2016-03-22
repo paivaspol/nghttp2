@@ -255,16 +255,6 @@ int on_begin_headers_callback(nghttp2_session *session,
 }
 } // namespace
 
-// ADDITIONAL
-/*
- * Called when at least one dependency is found.
- */
-int Http2Upstream::on_dependency_received() {
-  std::cout << "[shrpx_http2_upstream.cc] OnDependency" << std::endl;
-  return -1;
-}
-// END ADDITIONAL
-
 int Http2Upstream::on_request_headers(Downstream *downstream,
                                       const nghttp2_frame *frame) {
   if (downstream->get_response_state() == Downstream::MSG_COMPLETE) {
@@ -369,6 +359,12 @@ int Http2Upstream::on_request_headers(Downstream *downstream,
     return 0;
   }
 
+  // ADDITIONAL
+  // dep_reader_.set_url(req.path);
+  std::cout << "url: " << req.authority << req.path << std::endl;
+  start_resolving_dependencies("a", downstream->get_stream_id());
+  // END ADDITIONAL
+
   start_downstream(downstream);
 
   return 0;
@@ -415,7 +411,7 @@ void Http2Upstream::initiate_downstream(Downstream *downstream) {
   downstream_queue_.mark_active(downstream);
 
   // ADDITIONAL
-  std::cout << "[shrpx_http2_upstream] Connected to downstream" << std::endl;
+  // std::cout << "[shrpx_http2_upstream] Connected to downstream" << std::endl;
   // END ADDITIONAL
 
   return;
@@ -448,7 +444,6 @@ int on_frame_recv_callback(nghttp2_session *session, const nghttp2_frame *frame,
   }
   case NGHTTP2_HEADERS: {
     std::cout << "[shrpx_http2_upstream.cc] received HEADERS" << std::endl;
-    upstream->on_dependency_received();
     auto downstream = static_cast<Downstream *>(
         nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
     if (!downstream) {
@@ -493,7 +488,6 @@ int on_frame_recv_callback(nghttp2_session *session, const nghttp2_frame *frame,
     // We have received a dependency frame from the client. This indicates that
     // the client would like to initiate a dependency stream with us.
     // Ensure that we create a dependency stream.
-    upstream->on_dependency_received();
     return 0;
   // END ADDTITIONAL
   default:
@@ -866,6 +860,7 @@ Http2Upstream::Http2Upstream(ClientHandler *handler)
   rv = nghttp2_session_server_new2(&session_, http2conf.upstream.callbacks,
                                    this, http2conf.upstream.option);
 
+  std::cout << "Creating Http2Upstream" << std::endl;
   assert(rv == 0);
 
   flow_control_ = true;
@@ -914,6 +909,13 @@ Http2Upstream::Http2Upstream(ClientHandler *handler)
       get_config()->conn.upstream.timeout.http2_read);
 
   handler_->signal_write();
+
+  // ADDITIONAL
+  dep_reader_.set_on_new_dependency_callback(
+      std::bind(&Http2Upstream::on_new_dependency_callback, this));
+  dep_reader_.set_on_all_dependencies_discovered(
+      std::bind(&Http2Upstream::on_all_dependencies_discovered_callback, this));
+  // END ADDITIONAL
 }
 
 Http2Upstream::~Http2Upstream() {
@@ -1537,16 +1539,10 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
   }
 
   // ADDITIONAL
-  std::cout << "submitted response " << std::endl;
+  std::cout << "[Http2Upstream.cc] submitted response " << std::endl;
+  dep_reader_.StartReturningDependencies();
   // Prepare the stream for DEPENDENCY frames.
   // Open the dependency stream.
-  if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
-      downstream->get_stream_id(), dependency_data_provider_ptr) == 0) {
-    std::cout << "submitted dependencies" << std::endl;
-  } else {
-    std::cout << "submitted dependencies failed" << std::endl;
-  }
-  // END ADDITIONAL
   // Find out whether we have dependencies. If we do, dump it here.
   // END ADDITIONAL
 
@@ -2017,5 +2013,46 @@ void Http2Upstream::cancel_premature_downstream(
   }
   downstream_queue_.remove_and_get_blocked(promised_downstream, false);
 }
+
+// ADDITIONAL
+/*
+ * Called when at least one dependency is found.
+ */
+int Http2Upstream::on_dependency_received() {
+  std::cout << "[shrpx_http2_upstream.cc] OnDependency" << std::endl;
+  return -1;
+}
+
+void Http2Upstream::on_new_dependency_callback() {
+  std::cout << "[shrpx_http2_upstream.cc] new dependency callback" << std::endl;
+  // Here is where we would like to submit dependency frames.
+  int32_t stream_id = dep_reader_.stream_id();
+  nghttp2_data_provider dependency_data_provider = 
+    dep_reader_.GetDependenciesDataProvider();
+  nghttp2_data_provider *dependency_data_provider_ptr = &dependency_data_provider;
+  if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
+      stream_id, dependency_data_provider_ptr) == 0) {
+    std::cout << "submitted dependencies" << std::endl;
+  } else {
+    std::cout << "submitted dependencies failed" << std::endl;
+  }
+}
+
+void Http2Upstream::on_all_dependencies_discovered_callback() {
+  std::cout << "[shrpx_http2_upstream.cc] all dependencies discovered callback" << std::endl;
+  // Allow the stream to sent END_STREAM flag.
+}
+
+void Http2Upstream::start_resolving_dependencies(std::string url, int32_t stream_id) {
+  // Check whether the stream is expecting dependencies or not.
+  if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) == 0) {
+    std::cout << "Start resolving dependencies for: " << stream_id << std::endl;
+    dep_reader_.set_url(url);
+    dep_reader_.set_stream_id(stream_id);
+    dep_reader_.Start();
+  }
+}
+// END ADDITIONAL
+
 
 } // namespace shrpx

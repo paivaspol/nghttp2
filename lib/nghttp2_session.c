@@ -1715,9 +1715,11 @@ static int nghttp2_session_predicate_data_send(nghttp2_session *session,
        queued but not yet sent. In this case, we won't send DATA
        frames. */
     if (stream->state == NGHTTP2_STREAM_CLOSING) {
+      printf("[nghttp2_session] stream closing\n");
       return NGHTTP2_ERR_STREAM_CLOSING;
     }
     if (stream->state == NGHTTP2_STREAM_RESERVED) {
+      printf("[nghttp2_session] stream reserved\n");
       return NGHTTP2_ERR_INVALID_STREAM_STATE;
     }
     return 0;
@@ -1727,8 +1729,10 @@ static int nghttp2_session_predicate_data_send(nghttp2_session *session,
     return 0;
   }
   if (stream->state == NGHTTP2_STREAM_CLOSING) {
+    printf("[nghttp2_session] stream is closing\n");
     return NGHTTP2_ERR_STREAM_CLOSING;
   }
+  printf("[nghttp2_session] invalid stream state\n");
   return NGHTTP2_ERR_INVALID_STREAM_STATE;
 }
 
@@ -2067,12 +2071,6 @@ static int session_prep_frame(nghttp2_session *session,
     stream = nghttp2_session_get_stream(session, frame->hd.stream_id);
     printf("[nghttp2_session] stream: %d\n", frame->hd.stream_id);
 
-    /*
-    if (stream) {
-      assert(stream->item == item);
-    }
-    */
-
     rv = nghttp2_session_predicate_data_send(session, stream);
     printf("[nghttp2_session] here(-1) %d\n", rv);
     if (rv != 0) {
@@ -2160,6 +2158,7 @@ static int session_prep_frame(nghttp2_session *session,
   }
   // END ADDITIONAL
   else {
+    printf("[nghttp2_session] data\n");
     size_t next_readmax;
     nghttp2_stream *stream;
 
@@ -3181,6 +3180,8 @@ static int session_call_on_begin_frame(nghttp2_session *session,
                                        const nghttp2_frame_hd *hd) {
   int rv;
 
+  printf("flag: %" PRId8 "\n", hd->flags);
+
   if (session->callbacks.on_begin_frame_callback) {
 
     rv = session->callbacks.on_begin_frame_callback(session, hd,
@@ -3667,6 +3668,14 @@ int nghttp2_session_on_request_headers_received(nghttp2_session *session,
   if (!stream) {
     return NGHTTP2_ERR_NOMEM;
   }
+
+  // ADDITIONAL
+  printf("frame header flags: %" PRId8 "\n", frame->hd.flags);
+  if (frame->hd.flags & NGHTTP2_FLAG_REQUESTING_DEPENDENCIES) {
+    printf("[nghttp2_session] Frame requesting dependencies\n");
+    nghttp2_stream_set_still_have_dependencies(stream, 1);
+  }
+  // END ADDITIONAL
 
   rv = nghttp2_session_adjust_closed_stream(session);
   if (nghttp2_is_fatal(rv)) {
@@ -5176,7 +5185,8 @@ ssize_t nghttp2_session_mem_recv(nghttp2_session *session, const uint8_t *in,
 
         iframe->frame.hd.flags &=
             (NGHTTP2_FLAG_END_STREAM | NGHTTP2_FLAG_END_HEADERS |
-             NGHTTP2_FLAG_PADDED | NGHTTP2_FLAG_PRIORITY);
+             NGHTTP2_FLAG_PADDED | NGHTTP2_FLAG_PRIORITY |
+             NGHTTP2_FLAG_REQUESTING_DEPENDENCIES);
 
         rv = inbound_frame_handle_pad(iframe, &iframe->frame.hd);
         if (rv < 0) {
@@ -6644,7 +6654,8 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
     /* If NGHTTP2_DATA_FLAG_NO_END_STREAM is set, don't set
        NGHTTP2_FLAG_END_STREAM */
     if ((aux_data->flags & NGHTTP2_FLAG_END_STREAM) &&
-        (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM) == 0) {
+        (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM) == 0 &&
+        stream->still_have_dependencies) {
       frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
     }
   }
@@ -7140,5 +7151,20 @@ int nghttp2_session_create_idle_stream(nghttp2_session *session,
 // ADDITIONAL
 int nghttp2_session_has_open_dependency_stream(nghttp2_session *session) {
   return session->has_opened_dependency_stream;
+}
+
+int nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *session, int32_t stream_id) {
+  nghttp2_stream *stream;
+  stream = nghttp2_session_get_stream(session, stream_id);
+
+  if (!stream) {
+    return -1;
+  }
+
+  if (!stream->still_have_dependencies) {
+    return -1;
+  }
+
+  return 0;
 }
 // END ADDITIONAL

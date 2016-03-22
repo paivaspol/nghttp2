@@ -2240,7 +2240,6 @@ void process_options(
 int main(int argc, char **argv) {
   nghttp2::ssl::libssl_init();
   DependencyReader depReader;
-  depReader.hello_world();
   std::deque<std::string> *deps = depReader.ReadDependencies();
   std::cout << "len: " << deps->size() << std::endl;
   for (std::deque<std::string>::const_iterator i = deps->begin(); i != deps->end(); ++i)

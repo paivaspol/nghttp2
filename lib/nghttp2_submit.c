@@ -537,52 +537,51 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   printf("[nghttp2_submit] submitting dependency.\n");
   stream = nghttp2_session_get_stream(session, stream_id);
 
-  printf("[nghttp2_submit] (1)\n");
+  // printf("[nghttp2_submit] (1)\n");
 
   /* All 32bit signed stream IDs are spent. */
   if (session->next_stream_id > INT32_MAX) {
     return NGHTTP2_ERR_STREAM_ID_NOT_AVAILABLE;
   }
 
-  printf("[nghttp2_submit] (2)\n");
+  // printf("[nghttp2_submit] (2)\n");
 
   item = nghttp2_mem_malloc(mem, sizeof(nghttp2_outbound_item));
   if (item == NULL) {
-    printf("[nghttp2_submit] (1) err\n");
     return NGHTTP2_ERR_NOMEM;
   }
 
-  printf("[nghttp2_submit] (3)\n");
+  // printf("[nghttp2_submit] (3)\n");
 
   nghttp2_outbound_item_init(item);
 
-  printf("[nghttp2_submit] (4)\n");
+  // printf("[nghttp2_submit] (4)\n");
 
   /* TODO: this is weird.. May be this data provider is just the
    * data provider of the auxilary data. */
   // item->aux_data.data.data_prd = *data_prd;
-  printf("[nghttp2_submit] item->aux_data: %d\n", item->aux_data);
-  printf("[nghttp2_submit] dereferencing data_prd\n");
+  // printf("[nghttp2_submit] item->aux_data: %d\n", item->aux_data);
+  // printf("[nghttp2_submit] dereferencing data_prd\n");
   nghttp2_data_provider data = *data_prd;
   item->aux_data.data.data_prd = *data_prd;
 
-  printf("[nghttp2_submit] (5)\n");
-  printf("[nghttp2_submit] (6)\n");
+  // printf("[nghttp2_submit] (5)\n");
+  // printf("[nghttp2_submit] (6)\n");
   frame = &item->frame;
-  printf("[nghttp2_submit] (7)\n");
+  // printf("[nghttp2_submit] (7)\n");
   
   // TODO: Fix the dependency stream id.
   ext_frame_dependency_init(&frame->dependency, flags, stream_id, -1);
-  printf("[nghttp2_submit] (8)\n");
+  // printf("[nghttp2_submit] (8)\n");
   rv = nghttp2_session_add_item(session, item);
-  printf("[nghttp2_submit] (9)\n");
+  // printf("[nghttp2_submit] (9)\n");
   if (rv != 0) {
     ext_frame_dependency_free(&frame->dependency);
     nghttp2_mem_free(mem, item);
     return rv;
   }
   session->has_opened_dependency_stream = 1;
-  printf("[nghttp2_submit] (10) dependency_stream_id: %d\n", -1);
+  // printf("[nghttp2_submit] (10) dependency_stream_id: %d\n", -1);
   return dependency_stream_id;
 }
 // END ADDITIONAL

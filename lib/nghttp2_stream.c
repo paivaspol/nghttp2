@@ -84,6 +84,11 @@ void nghttp2_stream_init(nghttp2_stream *stream, int32_t stream_id,
   stream->descendant_next_seq = 0;
   stream->seq = 0;
   stream->last_writelen = 0;
+
+  // ADDITIONAL
+  // By default streams shouldn't expect dependencies.
+  stream->still_have_dependencies = 0;
+  // END ADDITIONAL
 }
 
 void nghttp2_stream_free(nghttp2_stream *stream) {
@@ -985,3 +990,14 @@ int32_t nghttp2_stream_get_sum_dependency_weight(nghttp2_stream *stream) {
 int32_t nghttp2_stream_get_stream_id(nghttp2_stream *stream) {
   return stream->stream_id;
 }
+
+// ADDITIONAL
+void nghttp2_stream_set_still_have_dependencies(nghttp2_stream *stream,
+                                                uint8_t still_have_dependencies) {
+  stream->still_have_dependencies = still_have_dependencies;
+}
+
+uint8_t nghttp2_stream_still_have_dependencies(nghttp2_stream *stream) {
+  return stream->still_have_dependencies;
+}
+// END ADDITIONAL

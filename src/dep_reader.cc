@@ -1,3 +1,5 @@
+#include <assert.h>
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -8,15 +10,37 @@
 #include "dep_reader.h"
 
 namespace shrpx {
-DependencyReader::DependencyReader() {
+
+DependencyReader::DependencyReader()
+ :  can_start_notifying_upstream_(false),
+    stream_id_(0),
+    url_(""),
+    on_new_dependency_callback_(NULL),
+    on_all_dependencies_discovered_(NULL) {
 }
 
 DependencyReader::~DependencyReader() {
 
 }
 
-void DependencyReader::hello_world() {
-  std::cout << "Hello World!" << std::endl;
+void DependencyReader::Start() {
+  assert(!url_.empty());
+  assert(stream_id_ > 0);
+
+  // First stage, read in from file and call the callback functions.
+  std::ifstream infile("temp.txt");
+  std::string line;
+  while (std::getline(infile, line)) {
+    dependencies_.push_back(line);
+  } 
+}
+
+void DependencyReader::StartReturningDependencies() {
+  can_start_notifying_upstream_ = true;
+  if (!dependencies_.empty()) {
+    on_new_dependency_callback_();
+    on_all_dependencies_discovered_();
+  }
 }
 
 std::deque<std::string> *DependencyReader::ReadDependencies() {
