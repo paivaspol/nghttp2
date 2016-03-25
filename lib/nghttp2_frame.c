@@ -130,7 +130,7 @@ void ext_frame_dependency_init(ext_dependency *frame, uint8_t flags,
                                int32_t stream_id, 
                                int32_t dependency_stream_id) {
   /* This design is similar to that of DATA frame. Frame size is still unknown. */
-  printf("[frame.cc] stream_id: %u\n", stream_id);
+  // printf("[frame.cc] stream_id: %u\n", stream_id);
   if (flags | EXT_DEPENDENCY_FLAG_INIT) {
     nghttp2_frame_hd_init(&frame->hd, 8, EXT_DEPENDENCY, flags, stream_id);
     frame->num_dependencies = 0;
@@ -140,7 +140,7 @@ void ext_frame_dependency_init(ext_dependency *frame, uint8_t flags,
     frame->num_dependencies = 0;
     frame->dependency_stream_id = dependency_stream_id;
   }
-  printf("[nghttp2_frame.c] frame dependencies: %d dependency_stream: %d\n", frame->num_dependencies, frame->dependency_stream_id);
+  // printf("[nghttp2_frame.c] frame dependencies: %d dependency_stream: %d\n", frame->num_dependencies, frame->dependency_stream_id);
 }
 
 void ext_frame_dependency_free(ext_dependency *frame _U_) {}

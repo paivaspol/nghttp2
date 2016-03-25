@@ -1826,7 +1826,7 @@ static int session_prep_frame(nghttp2_session *session,
   frame = &item->frame;
   
   // ADDITIONAL
-  printf("[nghttp2_session] preping frame\n");
+  // printf("[nghttp2_session] preping frame\n");
   // END ADDITIONAL
 
   if (!(frame->hd.type == NGHTTP2_DATA || 
@@ -2088,7 +2088,7 @@ static int session_prep_frame(nghttp2_session *session,
       }
       return rv;
     }
-    printf("[nghttp2_session] here(0)\n");
+    // printf("[nghttp2_session] here(0)\n");
 
     assert(stream);
     next_readmax = nghttp2_session_next_data_read(session, stream);
@@ -2158,7 +2158,7 @@ static int session_prep_frame(nghttp2_session *session,
   }
   // END ADDITIONAL
   else {
-    printf("[nghttp2_session] data\n");
+    // printf("[nghttp2_session] data\n");
     size_t next_readmax;
     nghttp2_stream *stream;
 
@@ -6532,7 +6532,6 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
     frame->hd.flags = EXT_DEPENDENCY_FLAG_INIT;
   }
   /* Pack the rest of the data here. num_dependencies, dependency_stream */
-  printf("sizeof(size_t) = %lu sizeof(uint32_t) = %lu\n", sizeof(size_t), sizeof(uint32_t));
   nghttp2_put_uint32be(buf->last, frame->dependency.num_dependencies);
   buf->last += sizeof(uint32_t);
   nghttp2_put_uint32be(buf->last, frame->dependency.dependency_stream_id);
@@ -6545,10 +6544,8 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
       &aux_data->data_prd.source, session->user_data);
   buf->last += payloadlen;
   
-  printf("Payload Length Before: %zd\n", payloadlen);
   payloadlen += 4 + 4;
   frame->hd.length = (size_t) payloadlen;
-  printf("Payload Length After: %zd\n", payloadlen);
 
   nghttp2_frame_pack_frame_hd(buf->pos, &frame->hd);
 
@@ -6559,7 +6556,7 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
 
   reschedule_stream(stream);
 
-  printf("num deps: %u stream id: %u network(num_dep): %u network(stream): %u\n", frame->dependency.num_dependencies, frame->dependency.dependency_stream_id, htonl(frame->dependency.num_dependencies), htonl(frame->dependency.dependency_stream_id));
+  // printf("num deps: %u stream id: %u network(num_dep): %u network(stream): %u\n", frame->dependency.num_dependencies, frame->dependency.dependency_stream_id, htonl(frame->dependency.num_dependencies), htonl(frame->dependency.dependency_stream_id));
   return 0;
 }
 

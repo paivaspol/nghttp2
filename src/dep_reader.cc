@@ -89,9 +89,7 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
                            nghttp2_data_source *source, void *user_data) {
   std::cout << "[dep_reader.cc] READ CALLBACK" << std::endl;
   auto dependencies = static_cast<std::deque<std::string> *>(source->ptr);
-  std::cout << "[dep_reader.cc] (0)" << std::endl;
   if (!dependencies->empty()) {
-    std::cout << "[dep_reader.cc] (1)" << std::endl;
     /*
      * TODO: Can optimize using a greedy approach where
      * the list is sorted by the length of the dependency URL.
@@ -102,22 +100,17 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
     while (length_left - dependencies->front().size()  > 0 &&
            !dependencies->empty()) {
       std::string dependency = dependencies->front();
-      std::cout << "dependency: " << dependency << " dep_len: " << dependency.length() << std::endl;
+      // std::cout << "dependency: " << dependency << " dep_len: " << dependency.length() << std::endl;
       cumulative_size_read += dependency.length();
       length_left -= dependency.length();
       result_str += dependency + "\n";
       dependencies->pop_front();
     }
-    std::cout << "[dep_reader.cc] (2)" << std::endl;
 
     /* Pack result string to uint8_t format. */
-    // char *cstr = new char[result_str.length() + 1];
-    // std::strncpy(cstr, result_str.c_str(), result_str.length());
     std::memcpy(buf, result_str.c_str(), result_str.length() + 1);
-    std::cout << "[dep_reader.cc] done with read callback with size: " << cumulative_size_read << std::endl;
     return result_str.length() + 1; // Account for the NULL terminal.
   } else {
-    std::cout << "[dep_reader.cc] done with read callback ret 0" << std::endl;
     return 0;
   }
 }

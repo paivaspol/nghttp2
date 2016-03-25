@@ -361,7 +361,10 @@ int Http2Upstream::on_request_headers(Downstream *downstream,
 
   // ADDITIONAL
   // dep_reader_.set_url(req.path);
-  std::cout << "url: " << req.authority << req.path << std::endl;
+  std::cout << "url: " << req.authority << req.path << " requesting dependencies: " << (frame->hd.flags & NGHTTP2_FLAG_REQUESTING_DEPENDENCIES) << std::endl;
+  if (req.path == "/") {
+    did_sent_dependency_ = false;
+  }
   start_resolving_dependencies("a", downstream->get_stream_id());
   // END ADDITIONAL
 
@@ -915,6 +918,7 @@ Http2Upstream::Http2Upstream(ClientHandler *handler)
       std::bind(&Http2Upstream::on_new_dependency_callback, this));
   dep_reader_.set_on_all_dependencies_discovered(
       std::bind(&Http2Upstream::on_all_dependencies_discovered_callback, this));
+  did_sent_dependency_ = false;
   // END ADDITIONAL
 }
 
@@ -2041,9 +2045,15 @@ void Http2Upstream::on_new_dependency_callback() {
 void Http2Upstream::on_all_dependencies_discovered_callback() {
   std::cout << "[shrpx_http2_upstream.cc] all dependencies discovered callback" << std::endl;
   // Allow the stream to sent END_STREAM flag.
+  did_sent_dependency_ = true;
 }
 
 void Http2Upstream::start_resolving_dependencies(std::string url, int32_t stream_id) {
+  // TODO: Remove this
+  if (did_sent_dependency_) {
+    return;
+  }
+
   // Check whether the stream is expecting dependencies or not.
   if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) == 0) {
     std::cout << "Start resolving dependencies for: " << stream_id << std::endl;
