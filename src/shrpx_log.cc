@@ -53,7 +53,10 @@ using namespace nghttp2;
 namespace shrpx {
 
 namespace {
-const char *SEVERITY_STR[] = {"INFO", "NOTICE", "WARN", "ERROR", "FATAL"};
+const StringRef SEVERITY_STR[] = {
+    StringRef::from_lit("INFO"), StringRef::from_lit("NOTICE"),
+    StringRef::from_lit("WARN"), StringRef::from_lit("ERROR"),
+    StringRef::from_lit("FATAL")};
 } // namespace
 
 namespace {
@@ -70,9 +73,9 @@ int Log::severity_thres_ = NOTICE;
 
 void Log::set_severity_level(int severity) { severity_thres_ = severity; }
 
-int Log::set_severity_level_by_name(const char *name) {
+int Log::set_severity_level_by_name(const StringRef &name) {
   for (size_t i = 0, max = array_size(SEVERITY_STR); i < max; ++i) {
-    if (strcmp(SEVERITY_STR[i], name) == 0) {
+    if (name == SEVERITY_STR[i]) {
       severity_thres_ = i;
       return 0;
     }
@@ -119,10 +122,10 @@ Log::~Log() {
   if (errorconf.syslog) {
     if (severity_ == NOTICE) {
       syslog(severity_to_syslog_level(severity_), "[%s] %s",
-             SEVERITY_STR[severity_], stream_.str().c_str());
+             SEVERITY_STR[severity_].c_str(), stream_.str().c_str());
     } else {
       syslog(severity_to_syslog_level(severity_), "[%s] %s (%s:%d)",
-             SEVERITY_STR[severity_], stream_.str().c_str(), filename_,
+             SEVERITY_STR[severity_].c_str(), stream_.str().c_str(), filename_,
              linenum_);
     }
 
@@ -136,16 +139,18 @@ Log::~Log() {
   auto &time_local = lgconf->time_local_str;
 
   if (severity_ == NOTICE) {
-    rv = snprintf(buf, sizeof(buf), "%s PID%d [%s%s%s] %s\n",
-                  time_local.c_str(), get_config()->pid,
-                  tty ? SEVERITY_COLOR[severity_] : "", SEVERITY_STR[severity_],
-                  tty ? "\033[0m" : "", stream_.str().c_str());
+    rv =
+        snprintf(buf, sizeof(buf), "%s PID%d [%s%s%s] %s\n", time_local.c_str(),
+                 get_config()->pid, tty ? SEVERITY_COLOR[severity_] : "",
+                 SEVERITY_STR[severity_].c_str(), tty ? "\033[0m" : "",
+                 stream_.str().c_str());
   } else {
     rv = snprintf(buf, sizeof(buf), "%s PID%d [%s%s%s] %s%s:%d%s %s\n",
                   time_local.c_str(), get_config()->pid,
-                  tty ? SEVERITY_COLOR[severity_] : "", SEVERITY_STR[severity_],
-                  tty ? "\033[0m" : "", tty ? "\033[1;30m" : "", filename_,
-                  linenum_, tty ? "\033[0m" : "", stream_.str().c_str());
+                  tty ? SEVERITY_COLOR[severity_] : "",
+                  SEVERITY_STR[severity_].c_str(), tty ? "\033[0m" : "",
+                  tty ? "\033[1;30m" : "", filename_, linenum_,
+                  tty ? "\033[0m" : "", stream_.str().c_str());
   }
 
   if (rv < 0) {
@@ -393,23 +398,23 @@ int reopen_log_files() {
   auto &accessconf = get_config()->logging.access;
   auto &errorconf = get_config()->logging.error;
 
-  if (!accessconf.syslog && accessconf.file) {
-    new_accesslog_fd = util::open_log_file(accessconf.file.get());
+  if (!accessconf.syslog && !accessconf.file.empty()) {
+    new_accesslog_fd = util::open_log_file(accessconf.file.c_str());
 
     if (new_accesslog_fd == -1) {
-      LOG(ERROR) << "Failed to open accesslog file " << accessconf.file.get();
+      LOG(ERROR) << "Failed to open accesslog file " << accessconf.file;
       res = -1;
     }
   }
 
-  if (!errorconf.syslog && errorconf.file) {
-    new_errorlog_fd = util::open_log_file(errorconf.file.get());
+  if (!errorconf.syslog && !errorconf.file.empty()) {
+    new_errorlog_fd = util::open_log_file(errorconf.file.c_str());
 
     if (new_errorlog_fd == -1) {
       if (lgconf->errorlog_fd != -1) {
-        LOG(ERROR) << "Failed to open errorlog file " << errorconf.file.get();
+        LOG(ERROR) << "Failed to open errorlog file " << errorconf.file;
       } else {
-        std::cerr << "Failed to open errorlog file " << errorconf.file.get()
+        std::cerr << "Failed to open errorlog file " << errorconf.file
                   << std::endl;
       }
 

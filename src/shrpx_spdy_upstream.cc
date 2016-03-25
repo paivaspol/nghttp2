@@ -143,6 +143,10 @@ namespace {
 void on_ctrl_recv_callback(spdylay_session *session, spdylay_frame_type type,
                            spdylay_frame *frame, void *user_data) {
   auto upstream = static_cast<SpdyUpstream *>(user_data);
+  auto handler = upstream->get_client_handler();
+
+  handler->signal_reset_upstream_conn_rtimer();
+
   switch (type) {
   case SPDYLAY_SYN_STREAM: {
     if (LOG_ENABLED(INFO)) {
@@ -154,6 +158,8 @@ void on_ctrl_recv_callback(spdylay_session *session, spdylay_frame_type type,
         upstream->add_pending_downstream(frame->syn_stream.stream_id);
 
     auto &req = downstream->request();
+
+    auto &balloc = downstream->get_block_allocator();
 
     downstream->reset_upstream_rtimer();
 
@@ -188,10 +194,15 @@ void on_ctrl_recv_callback(spdylay_session *session, spdylay_frame_type type,
     }
 
     for (size_t i = 0; nv[i]; i += 2) {
-      req.fs.add_header(nv[i], nv[i + 1]);
+      auto name = StringRef{nv[i]};
+      auto value = StringRef{nv[i + 1]};
+      auto token = http2::lookup_token(name.byte(), name.size());
+      req.fs.add_header_token(make_string_ref(balloc, StringRef{name}),
+                              make_string_ref(balloc, StringRef{value}), false,
+                              token);
     }
 
-    if (req.fs.index_headers() != 0) {
+    if (req.fs.parse_content_length() != 0) {
       if (upstream->error_reply(downstream, 400) != 0) {
         ULOG(FATAL, upstream) << "error_reply failed";
       }
@@ -259,13 +270,13 @@ void on_ctrl_recv_callback(spdylay_session *session, spdylay_frame_type type,
     } else {
       req.scheme = scheme->value;
       req.authority = host->value;
-      if (get_config()->http2_proxy || get_config()->client_proxy) {
+      if (get_config()->http2_proxy) {
         req.path = path->value;
-      } else if (method_token == HTTP_OPTIONS && path->value == "*") {
+      } else if (method_token == HTTP_OPTIONS &&
+                 path->value == StringRef::from_lit("*")) {
         // Server-wide OPTIONS request.  Path is empty.
       } else {
-        req.path = http2::rewrite_clean_path(std::begin(path->value),
-                                             std::end(path->value));
+        req.path = http2::rewrite_clean_path(balloc, path->value);
       }
     }
 
@@ -278,7 +289,6 @@ void on_ctrl_recv_callback(spdylay_session *session, spdylay_frame_type type,
     downstream->set_request_state(Downstream::HEADER_COMPLETE);
 
 #ifdef HAVE_MRUBY
-    auto handler = upstream->get_client_handler();
     auto worker = handler->get_worker();
     auto mruby_ctx = worker->get_mruby_context();
 
@@ -416,6 +426,10 @@ void on_data_recv_callback(spdylay_session *session, uint8_t flags,
   auto upstream = static_cast<SpdyUpstream *>(user_data);
   auto downstream = static_cast<Downstream *>(
       spdylay_session_get_stream_user_data(session, stream_id));
+  auto handler = upstream->get_client_handler();
+
+  handler->signal_reset_upstream_conn_rtimer();
+
   if (downstream && (flags & SPDYLAY_DATA_FLAG_FIN)) {
     if (!downstream->validate_request_recv_body_length()) {
       upstream->rst_stream(downstream, SPDYLAY_PROTOCOL_ERROR);
@@ -500,9 +514,7 @@ SpdyUpstream::SpdyUpstream(uint16_t version, ClientHandler *handler)
       downstream_queue_(
           get_config()->http2_proxy
               ? get_config()->conn.downstream.connections_per_host
-              : get_config()->conn.downstream.proto == PROTO_HTTP
-                    ? get_config()->conn.downstream.connections_per_frontend
-                    : 0,
+              : get_config()->conn.downstream.connections_per_frontend,
           !get_config()->http2_proxy),
       handler_(handler),
       session_(nullptr) {
@@ -544,7 +556,7 @@ SpdyUpstream::SpdyUpstream(uint16_t version, ClientHandler *handler)
   // TODO Maybe call from outside?
   std::array<spdylay_settings_entry, 2> entry;
   entry[0].settings_id = SPDYLAY_SETTINGS_MAX_CONCURRENT_STREAMS;
-  entry[0].value = http2conf.max_concurrent_streams;
+  entry[0].value = http2conf.upstream.max_concurrent_streams;
   entry[0].flags = SPDYLAY_ID_FLAG_SETTINGS_NONE;
 
   entry[1].settings_id = SPDYLAY_SETTINGS_INITIAL_WINDOW_SIZE;
@@ -845,14 +857,18 @@ int SpdyUpstream::send_reply(Downstream *downstream, const uint8_t *body,
   }
 
   const auto &resp = downstream->response();
+  auto &balloc = downstream->get_block_allocator();
 
-  auto status_string = http2::get_status_string(resp.http_status);
+  auto status_string = http2::get_status_string(balloc, resp.http_status);
 
   const auto &headers = resp.fs.headers();
 
+  auto &httpconf = get_config()->http;
+
   auto nva = std::vector<const char *>();
-  // 3 for :status, :version and server
-  nva.reserve(3 + headers.size());
+  // 6 for :status, :version and server.  1 for last terminal nullptr.
+  nva.reserve(6 + headers.size() * 2 +
+              httpconf.add_response_headers.size() * 2 + 1);
 
   nva.push_back(":status");
   nva.push_back(status_string.c_str());
@@ -879,6 +895,11 @@ int SpdyUpstream::send_reply(Downstream *downstream, const uint8_t *body,
     nva.push_back(get_config()->http.server_name.c_str());
   }
 
+  for (auto &p : httpconf.add_response_headers) {
+    nva.push_back(p.name.c_str());
+    nva.push_back(p.value.c_str());
+  }
+
   nva.push_back(nullptr);
 
   rv = spdylay_submit_response(session_, downstream->get_stream_id(),
@@ -902,8 +923,9 @@ int SpdyUpstream::error_reply(Downstream *downstream,
                               unsigned int status_code) {
   int rv;
   auto &resp = downstream->response();
+  auto &balloc = downstream->get_block_allocator();
 
-  auto html = http::create_error_html(status_code);
+  auto html = http::create_error_html(balloc, status_code);
   resp.http_status = status_code;
   auto body = downstream->get_response_buf();
   body->append(html);
@@ -916,8 +938,9 @@ int SpdyUpstream::error_reply(Downstream *downstream,
   auto lgconf = log_config();
   lgconf->update_tstamp(std::chrono::system_clock::now());
 
-  std::string content_length = util::utos(html.size());
-  std::string status_string = http2::get_status_string(status_code);
+  auto content_length = util::make_string_ref_uint(balloc, html.size());
+  auto status_string = http2::get_status_string(balloc, status_code);
+
   const char *nv[] = {":status", status_string.c_str(), ":version", "http/1.1",
                       "content-type", "text/html; charset=UTF-8", "server",
                       get_config()->http.server_name.c_str(), "content-length",
@@ -976,6 +999,7 @@ int SpdyUpstream::on_downstream_header_complete(Downstream *downstream) {
   }
 
   const auto &req = downstream->request();
+  auto &balloc = downstream->get_block_allocator();
 
 #ifdef HAVE_MRUBY
   auto worker = handler_->get_worker();
@@ -1000,8 +1024,7 @@ int SpdyUpstream::on_downstream_header_complete(Downstream *downstream) {
 
   auto &httpconf = get_config()->http;
 
-  if (!get_config()->http2_proxy && !get_config()->client_proxy &&
-      !httpconf.no_location_rewrite) {
+  if (!get_config()->http2_proxy && !httpconf.no_location_rewrite) {
     downstream->rewrite_location_response_header(req.scheme);
   }
 
@@ -1012,7 +1035,7 @@ int SpdyUpstream::on_downstream_header_complete(Downstream *downstream) {
 
   size_t hdidx = 0;
   std::string via_value;
-  auto status_string = http2::get_status_string(resp.http_status);
+  auto status_string = http2::get_status_string(balloc, resp.http_status);
   nv[hdidx++] = ":status";
   nv[hdidx++] = status_string.c_str();
   nv[hdidx++] = ":version";
@@ -1035,7 +1058,7 @@ int SpdyUpstream::on_downstream_header_complete(Downstream *downstream) {
     nv[hdidx++] = hd.value.c_str();
   }
 
-  if (!get_config()->http2_proxy && !get_config()->client_proxy) {
+  if (!get_config()->http2_proxy) {
     nv[hdidx++] = "server";
     nv[hdidx++] = httpconf.server_name.c_str();
   } else {
@@ -1054,18 +1077,20 @@ int SpdyUpstream::on_downstream_header_complete(Downstream *downstream) {
     }
   } else {
     if (via) {
-      via_value = via->value;
+      via_value = via->value.str();
       via_value += ", ";
     }
-    via_value +=
-        http::create_via_header_value(resp.http_major, resp.http_minor);
+    std::array<char, 16> viabuf;
+    auto end = http::create_via_header_value(std::begin(viabuf),
+                                             resp.http_major, resp.http_minor);
+    via_value.append(std::begin(viabuf), end);
     nv[hdidx++] = "via";
     nv[hdidx++] = via_value.c_str();
   }
 
   for (auto &p : httpconf.add_response_headers) {
-    nv[hdidx++] = p.first.c_str();
-    nv[hdidx++] = p.second.c_str();
+    nv[hdidx++] = p.name.c_str();
+    nv[hdidx++] = p.value.c_str();
   }
 
   nv[hdidx++] = 0;
@@ -1204,6 +1229,11 @@ int SpdyUpstream::on_downstream_reset(bool no_retry) {
   for (auto downstream = downstream_queue_.get_downstreams(); downstream;
        downstream = downstream->dlnext) {
     if (downstream->get_dispatch_state() != Downstream::DISPATCH_ACTIVE) {
+      // This is error condition when we failed push_request_headers()
+      // in initiate_downstream().  Otherwise, we have
+      // Downstream::DISPATCH_ACTIVE state, or we did not set
+      // DownstreamConnection.
+      downstream->pop_downstream_connection();
       continue;
     }
 
@@ -1244,8 +1274,7 @@ int SpdyUpstream::on_downstream_reset(bool no_retry) {
   return 0;
 }
 
-int SpdyUpstream::initiate_push(Downstream *downstream, const char *uri,
-                                size_t len) {
+int SpdyUpstream::initiate_push(Downstream *downstream, const StringRef &uri) {
   return 0;
 }
 

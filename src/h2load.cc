@@ -84,7 +84,7 @@ Config::Config()
       nreqs(1),
       nclients(1),
       nthreads(1),
-      max_concurrent_streams(-1),
+      max_concurrent_streams(1),
       window_bits(30),
       connection_window_bits(30),
       rate(0),
@@ -96,7 +96,9 @@ Config::Config()
       port(0),
       default_port(0),
       verbose(false),
-      timing_script(false) {}
+      timing_script(false),
+      base_uri_unix(false),
+      unix_addr{} {}
 
 Config::~Config() {
   if (base_uri_unix) {
@@ -200,7 +202,9 @@ void readcb(struct ev_loop *loop, ev_io *w, int revents) {
   auto client = static_cast<Client *>(w->data);
   client->restart_timeout();
   if (client->do_read() != 0) {
-    client->fail();
+    if (client->try_again_or_fail() == 0) {
+      return;
+    }
     delete client;
     return;
   }
@@ -451,7 +455,7 @@ void Client::restart_timeout() {
   }
 }
 
-void Client::fail() {
+int Client::try_again_or_fail() {
   disconnect();
 
   if (new_connection_requested) {
@@ -469,11 +473,19 @@ void Client::fail() {
 
       // Keep using current address
       if (connect() == 0) {
-        return;
+        return 0;
       }
       std::cerr << "client could not connect to host" << std::endl;
     }
   }
+
+  process_abandoned_streams();
+
+  return -1;
+}
+
+void Client::fail() {
+  disconnect();
 
   process_abandoned_streams();
 }
@@ -758,9 +770,10 @@ int Client::connection_made() {
 #endif // OPENSSL_VERSION_NUMBER >= 0x10002000L
 
     if (next_proto) {
-      if (util::check_h2_is_selected(next_proto, next_proto_len)) {
+      auto proto = StringRef{next_proto, next_proto_len};
+      if (util::check_h2_is_selected(proto)) {
         session = make_unique<Http2Session>(this);
-      } else if (util::streq_l(NGHTTP2_H1_1, next_proto, next_proto_len)) {
+      } else if (util::streq(NGHTTP2_H1_1, proto)) {
         session = make_unique<Http1Session>(this);
       }
 #ifdef HAVE_SPDYLAY
@@ -774,20 +787,18 @@ int Client::connection_made() {
 
       // Just assign next_proto to selected_proto anyway to show the
       // negotiation result.
-      selected_proto.assign(next_proto, next_proto + next_proto_len);
+      selected_proto = proto.str();
     } else {
       std::cout << "No protocol negotiated. Fallback behaviour may be activated"
                 << std::endl;
 
       for (const auto &proto : config.npn_list) {
-        if (std::equal(NGHTTP2_H1_1_ALPN,
-                       NGHTTP2_H1_1_ALPN + str_size(NGHTTP2_H1_1_ALPN),
-                       proto.c_str())) {
+        if (util::streq(NGHTTP2_H1_1_ALPN, StringRef{proto})) {
           std::cout
               << "Server does not support NPN/ALPN. Falling back to HTTP/1.1."
               << std::endl;
           session = make_unique<Http1Session>(this);
-          selected_proto = NGHTTP2_H1_1;
+          selected_proto = NGHTTP2_H1_1.str();
           break;
         }
       }
@@ -815,7 +826,7 @@ int Client::connection_made() {
       break;
     case Config::PROTO_HTTP1_1:
       session = make_unique<Http1Session>(this);
-      selected_proto = NGHTTP2_H1_1;
+      selected_proto = NGHTTP2_H1_1.str();
       break;
 #ifdef HAVE_SPDYLAY
     case Config::PROTO_SPDY2:
@@ -1384,7 +1395,7 @@ std::string get_reqline(const char *uri, const http_parser_url &u) {
   std::string reqline;
 
   if (util::has_uri_field(u, UF_PATH)) {
-    reqline = util::get_uri_field(uri, u, UF_PATH);
+    reqline = util::get_uri_field(uri, u, UF_PATH).str();
   } else {
     reqline = "/";
   }
@@ -1425,8 +1436,8 @@ bool parse_base_uri(std::string base_uri) {
     return false;
   }
 
-  config.scheme = util::get_uri_field(base_uri.c_str(), u, UF_SCHEMA);
-  config.host = util::get_uri_field(base_uri.c_str(), u, UF_HOST);
+  config.scheme = util::get_uri_field(base_uri.c_str(), u, UF_SCHEMA).str();
+  config.host = util::get_uri_field(base_uri.c_str(), u, UF_HOST).str();
   config.default_port = util::get_default_port(base_uri.c_str(), u);
   if (util::has_uri_field(u, UF_PORT)) {
     config.port = u.port;
@@ -1842,24 +1853,27 @@ int main(int argc, char **argv) {
     case 'i':
       config.ifile = optarg;
       break;
-    case 'p':
-      if (util::strieq(NGHTTP2_CLEARTEXT_PROTO_VERSION_ID, optarg)) {
+    case 'p': {
+      auto proto = StringRef{optarg};
+      if (util::strieq(StringRef::from_lit(NGHTTP2_CLEARTEXT_PROTO_VERSION_ID),
+                       proto)) {
         config.no_tls_proto = Config::PROTO_HTTP2;
-      } else if (util::strieq(NGHTTP2_H1_1, optarg)) {
+      } else if (util::strieq(NGHTTP2_H1_1, proto)) {
         config.no_tls_proto = Config::PROTO_HTTP1_1;
 #ifdef HAVE_SPDYLAY
-      } else if (util::strieq("spdy/2", optarg)) {
+      } else if (util::strieq_l("spdy/2", proto)) {
         config.no_tls_proto = Config::PROTO_SPDY2;
-      } else if (util::strieq("spdy/3", optarg)) {
+      } else if (util::strieq_l("spdy/3", proto)) {
         config.no_tls_proto = Config::PROTO_SPDY3;
-      } else if (util::strieq("spdy/3.1", optarg)) {
+      } else if (util::strieq_l("spdy/3.1", proto)) {
         config.no_tls_proto = Config::PROTO_SPDY3_1;
 #endif // HAVE_SPDYLAY
       } else {
-        std::cerr << "-p: unsupported protocol " << optarg << std::endl;
+        std::cerr << "-p: unsupported protocol " << proto << std::endl;
         exit(EXIT_FAILURE);
       }
       break;
+    }
     case 'r':
       config.rate = strtoul(optarg, nullptr, 10);
       if (config.rate == 0) {
@@ -1944,7 +1958,7 @@ int main(int argc, char **argv) {
         break;
       case 4:
         // npn-list option
-        config.npn_list = util::parse_config_str_list(optarg);
+        config.npn_list = util::parse_config_str_list(StringRef{optarg});
         break;
       case 5:
         // rate-period
@@ -1956,7 +1970,8 @@ int main(int argc, char **argv) {
         break;
       case 6:
         // --h1
-        config.npn_list = util::parse_config_str_list("http/1.1");
+        config.npn_list =
+            util::parse_config_str_list(StringRef::from_lit("http/1.1"));
         config.no_tls_proto = Config::PROTO_HTTP1_1;
         break;
       }
@@ -1980,7 +1995,8 @@ int main(int argc, char **argv) {
   }
 
   if (config.npn_list.empty()) {
-    config.npn_list = util::parse_config_str_list(DEFAULT_NPN_LIST);
+    config.npn_list =
+        util::parse_config_str_list(StringRef::from_lit(DEFAULT_NPN_LIST));
   }
 
   // serialize the APLN tokens

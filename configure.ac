@@ -25,7 +25,7 @@ dnl Do not change user variables!
 dnl http://www.gnu.org/software/automake/manual/html_node/Flag-Variables-Ordering.html
 
 AC_PREREQ(2.61)
-AC_INIT([nghttp2], [1.8.0-DEV], [t-tujikawa@users.sourceforge.net])
+AC_INIT([nghttp2], [1.9.0-DEV], [t-tujikawa@users.sourceforge.net])
 AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
@@ -40,15 +40,13 @@ AC_CANONICAL_TARGET
 
 AM_INIT_AUTOMAKE([subdir-objects])
 
-# AM_EXTRA_RECURSIVE_TARGETS requires automake 1.13 or higher
-m4_ifdef([AM_EXTRA_RECURSIVE_TARGETS], [AM_EXTRA_RECURSIVE_TARGETS([it itprep])])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 dnl See versioning rule:
 dnl  http://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
-AC_SUBST(LT_CURRENT, 18)
-AC_SUBST(LT_REVISION, 1)
-AC_SUBST(LT_AGE, 4)
+AC_SUBST(LT_CURRENT, 19)
+AC_SUBST(LT_REVISION, 0)
+AC_SUBST(LT_AGE, 5)
 
 major=`echo $PACKAGE_VERSION |cut -d. -f1 | sed -e "s/[^0-9]//g"`
 minor=`echo $PACKAGE_VERSION |cut -d. -f2 | sed -e "s/[^0-9]//g"`
@@ -352,7 +350,10 @@ fi
 # libxml2 (for src/nghttp)
 have_libxml2=no
 if test "x${request_libxml2}" != "xno"; then
-  AM_PATH_XML2(2.7.7, [have_libxml2=yes], [have_libxml2=no])
+  m4_ifdef([AM_PATH_XML2],
+    [AM_PATH_XML2(2.7.7, [have_libxml2=yes], [have_libxml2=no])],
+    [AC_MSG_WARN([configure was created without libxml2 detection macro; libxml2 detection is disabled])])
+
   if test "x${have_libxml2}" = "xyes"; then
     AC_DEFINE([HAVE_LIBXML2], [1], [Define to 1 if you have `libxml2` library.])
   fi
@@ -651,8 +652,13 @@ AC_CHECK_FUNC([timerfd_create],
 
 # For cygwin: we can link initgroups, so AC_CHECK_FUNCS succeeds, but
 # cygwin disables initgroups due to feature test macro magic with our
-# configuration.
-AC_CHECK_DECLS([initgroups], [], [], [[#include <grp.h>]])
+# configuration.  FreeBSD declares initgroups() in unistd.h.
+AC_CHECK_DECLS([initgroups], [], [], [[
+  #ifdef HAVE_UNISTD_H
+  # include <unistd.h>
+  #endif
+  #include <grp.h>
+]])
 
 # Checks for epoll availability, primarily for examples/tiny-nghttpd
 AX_HAVE_EPOLL([have_epoll=yes], [have_epoll=no])
@@ -714,6 +720,9 @@ if test "x$werror" != "xno"; then
     AX_CHECK_COMPILE_FLAG([-Wredundant-decls], [CFLAGS="$CFLAGS -Wredundant-decls"])
     # Only work with Clang for the moment
     AX_CHECK_COMPILE_FLAG([-Wheader-guard], [CFLAGS="$CFLAGS -Wheader-guard"])
+
+    # This is required because we pass format string as "const char*.
+    AX_CHECK_COMPILE_FLAG([-Wno-format-nonliteral], [CFLAGS="$CFLAGS -Wno-format-nonliteral"])
 
     # For C++ compiler
     AC_LANG_PUSH(C++)

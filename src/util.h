@@ -49,19 +49,26 @@
 
 #include "http-parser/http_parser.h"
 
+#include "template.h"
+#include "network.h"
+#include "allocator.h"
+
 namespace nghttp2 {
+
+constexpr auto NGHTTP2_H2_ALPN = StringRef::from_lit("\x2h2");
+constexpr auto NGHTTP2_H2 = StringRef::from_lit("h2");
 
 // The additional HTTP/2 protocol ALPN protocol identifier we also
 // supports for our applications to make smooth migration into final
 // h2 ALPN ID.
-constexpr char NGHTTP2_H2_16_ALPN[] = "\x5h2-16";
-constexpr char NGHTTP2_H2_16[] = "h2-16";
+constexpr auto NGHTTP2_H2_16_ALPN = StringRef::from_lit("\x5h2-16");
+constexpr auto NGHTTP2_H2_16 = StringRef::from_lit("h2-16");
 
-constexpr char NGHTTP2_H2_14_ALPN[] = "\x5h2-14";
-constexpr char NGHTTP2_H2_14[] = "h2-14";
+constexpr auto NGHTTP2_H2_14_ALPN = StringRef::from_lit("\x5h2-14");
+constexpr auto NGHTTP2_H2_14 = StringRef::from_lit("h2-14");
 
-constexpr char NGHTTP2_H1_1_ALPN[] = "\x8http/1.1";
-constexpr char NGHTTP2_H1_1[] = "http/1.1";
+constexpr auto NGHTTP2_H1_1_ALPN = StringRef::from_lit("\x8http/1.1");
+constexpr auto NGHTTP2_H1_1 = StringRef::from_lit("http/1.1");
 
 namespace util {
 
@@ -119,6 +126,8 @@ std::string percent_decode(InputIt first, InputIt last) {
   return result;
 }
 
+StringRef percent_decode(BlockAllocator &balloc, const StringRef &src);
+
 // Percent encode |target| if character is not in token or '%'.
 std::string percent_encode_token(const std::string &target);
 
@@ -146,7 +155,7 @@ std::string common_log_date(time_t t);
 // 2014-11-15T12:58:24.741Z)
 std::string iso8601_date(int64_t ms);
 
-time_t parse_http_date(const std::string &s);
+time_t parse_http_date(const StringRef &s);
 
 char upcase(char c);
 
@@ -187,8 +196,8 @@ inline bool starts_with(const std::string &a, const std::string &b) {
   return starts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
-inline bool starts_with(const char *a, const char *b) {
-  return starts_with(a, a + strlen(a), b, b + strlen(b));
+inline bool starts_with(const StringRef &a, const StringRef &b) {
+  return starts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
 struct CaseCmp {
@@ -210,15 +219,17 @@ inline bool istarts_with(const std::string &a, const std::string &b) {
   return istarts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
-template <typename InputIt>
-bool istarts_with(InputIt a, size_t an, const char *b) {
-  return istarts_with(a, a + an, b, b + strlen(b));
+inline bool istarts_with(const StringRef &a, const StringRef &b) {
+  return istarts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
-
-bool istarts_with(const char *a, const char *b);
 
 template <typename CharT, size_t N>
 bool istarts_with_l(const std::string &a, const CharT(&b)[N]) {
+  return istarts_with(std::begin(a), std::end(a), b, b + N - 1);
+}
+
+template <typename CharT, size_t N>
+bool istarts_with_l(const StringRef &a, const CharT(&b)[N]) {
   return istarts_with(std::begin(a), std::end(a), b, b + N - 1);
 }
 
@@ -235,6 +246,11 @@ inline bool ends_with(const std::string &a, const std::string &b) {
   return ends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
+template <typename CharT, size_t N>
+bool ends_with_l(const StringRef &a, const CharT(&b)[N]) {
+  return ends_with(std::begin(a), std::end(a), b, b + N - 1);
+}
+
 template <typename InputIterator1, typename InputIterator2>
 bool iends_with(InputIterator1 first1, InputIterator1 last1,
                 InputIterator2 first2, InputIterator2 last2) {
@@ -248,29 +264,18 @@ inline bool iends_with(const std::string &a, const std::string &b) {
   return iends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
+inline bool iends_with(const StringRef &a, const StringRef &b) {
+  return iends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
+}
+
 template <typename CharT, size_t N>
 bool iends_with_l(const std::string &a, const CharT(&b)[N]) {
   return iends_with(std::begin(a), std::end(a), b, b + N - 1);
 }
 
-int strcompare(const char *a, const uint8_t *b, size_t n);
-
-template <typename InputIt> bool strieq(const char *a, InputIt b, size_t bn) {
-  if (!a) {
-    return false;
-  }
-  auto blast = b + bn;
-  for (; *a && b != blast && lowcase(*a) == lowcase(*b); ++a, ++b)
-    ;
-  return !*a && b == blast;
-}
-
-template <typename InputIt1, typename InputIt2>
-bool strieq(InputIt1 a, size_t alen, InputIt2 b, size_t blen) {
-  if (alen != blen) {
-    return false;
-  }
-  return std::equal(a, a + alen, b, CaseCmp());
+template <typename CharT, size_t N>
+bool iends_with_l(const StringRef &a, const CharT(&b)[N]) {
+  return iends_with(std::begin(a), std::end(a), b, b + N - 1);
 }
 
 template <typename InputIt1, typename InputIt2>
@@ -283,61 +288,58 @@ bool strieq(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
 }
 
 inline bool strieq(const std::string &a, const std::string &b) {
-  return strieq(std::begin(a), a.size(), std::begin(b), b.size());
+  return strieq(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
-bool strieq(const char *a, const char *b);
-
-inline bool strieq(const char *a, const std::string &b) {
-  return strieq(a, b.c_str(), b.size());
+inline bool strieq(const StringRef &a, const StringRef &b) {
+  return strieq(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
 template <typename CharT, typename InputIt, size_t N>
 bool strieq_l(const CharT(&a)[N], InputIt b, size_t blen) {
-  return strieq(a, N - 1, b, blen);
+  return strieq(a, a + (N - 1), b, b + blen);
 }
 
 template <typename CharT, size_t N>
 bool strieq_l(const CharT(&a)[N], const std::string &b) {
-  return strieq(a, N - 1, std::begin(b), b.size());
+  return strieq(a, a + (N - 1), std::begin(b), std::end(b));
 }
 
-template <typename InputIt> bool streq(const char *a, InputIt b, size_t bn) {
-  if (!a) {
-    return false;
-  }
-  auto blast = b + bn;
-  for (; *a && b != blast && *a == *b; ++a, ++b)
-    ;
-  return !*a && b == blast;
+template <typename CharT, size_t N>
+bool strieq_l(const CharT(&a)[N], const StringRef &b) {
+  return strieq(a, a + (N - 1), std::begin(b), std::end(b));
 }
 
 template <typename InputIt1, typename InputIt2>
-bool streq(InputIt1 a, size_t alen, InputIt2 b, size_t blen) {
-  if (alen != blen) {
+bool streq(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
+  if (std::distance(first1, last1) != std::distance(first2, last2)) {
     return false;
   }
-  return std::equal(a, a + alen, b);
+  return std::equal(first1, last1, first2);
 }
 
-inline bool streq(const char *a, const char *b) {
-  if (!a || !b) {
-    return false;
-  }
-  return streq(a, strlen(a), b, strlen(b));
+inline bool streq(const StringRef &a, const StringRef &b) {
+  return streq(std::begin(a), std::end(a), std::begin(b), std::end(b));
 }
 
 template <typename CharT, typename InputIt, size_t N>
 bool streq_l(const CharT(&a)[N], InputIt b, size_t blen) {
-  return streq(a, N - 1, b, blen);
+  return streq(a, a + (N - 1), b, b + blen);
 }
 
 template <typename CharT, size_t N>
 bool streq_l(const CharT(&a)[N], const std::string &b) {
-  return streq(a, N - 1, std::begin(b), b.size());
+  return streq(a, a + (N - 1), std::begin(b), std::end(b));
 }
 
-bool strifind(const char *a, const char *b);
+template <typename CharT, size_t N>
+bool streq_l(const CharT(&a)[N], const StringRef &b) {
+  return streq(a, a + (N - 1), std::begin(b), std::end(b));
+}
+
+// Returns true if |a| contains |b|.  If both |a| and |b| are empty,
+// this function returns false.
+bool strifind(const StringRef &a, const StringRef &b);
 
 template <typename InputIt> void inp_strlower(InputIt first, InputIt last) {
   std::transform(first, last, first, lowcase);
@@ -367,6 +369,33 @@ template <typename T> std::string utos(T n) {
     res[i] = (n % 10) + '0';
   }
   return res;
+}
+
+template <typename T, typename OutputIt> OutputIt utos(OutputIt dst, T n) {
+  if (n == 0) {
+    *dst++ = '0';
+    return dst;
+  }
+  int i = 0;
+  T t = n;
+  for (; t; t /= 10, ++i)
+    ;
+  --i;
+  auto p = dst + i;
+  auto res = p + 1;
+  for (; n; --i, n /= 10) {
+    *p-- = (n % 10) + '0';
+  }
+  return res;
+}
+
+template <typename T>
+StringRef make_string_ref_uint(BlockAllocator &balloc, T n) {
+  auto iov = make_byte_ref(balloc, str_size("18446744073709551615") + 1);
+  auto p = iov.base;
+  p = util::utos(p, n);
+  *p = '\0';
+  return StringRef{iov.base, p};
 }
 
 template <typename T> std::string utos_unit(T n) {
@@ -440,8 +469,8 @@ bool fieldeq(const char *uri1, const http_parser_url &u1, const char *uri2,
 bool fieldeq(const char *uri, const http_parser_url &u,
              http_parser_url_fields field, const char *t);
 
-std::string get_uri_field(const char *uri, const http_parser_url &u,
-                          http_parser_url_fields field);
+StringRef get_uri_field(const char *uri, const http_parser_url &u,
+                        http_parser_url_fields field);
 
 uint16_t get_default_port(const char *uri, const http_parser_url &u);
 
@@ -459,10 +488,11 @@ bool numeric_host(const char *hostname, int family);
 // failed, "unknown" is returned.
 std::string numeric_name(const struct sockaddr *sa, socklen_t salen);
 
-// Returns string representation of numeric address and port of |addr|
-// of length |salen|.  The format is like <HOST>:<PORT>.  For IPv6
-// address, address is enclosed by square brackets ([]).
-std::string numeric_hostport(const struct sockaddr *sa, socklen_t salen);
+// Returns string representation of numeric address and port of
+// |addr|.  If address family is AF_UNIX, this return path to UNIX
+// domain socket.  Otherwise, the format is like <HOST>:<PORT>.  For
+// IPv6 address, address is enclosed by square brackets ([]).
+std::string to_numeric_addr(const Address *addr);
 
 // Makes internal copy of stderr (and possibly stdout in the future),
 // which is then used as pointer to /dev/stderr or /proc/self/fd/2
@@ -504,9 +534,9 @@ bool check_path(const std::string &path);
 // unit.
 int64_t to_time64(const timeval &tv);
 
-// Returns true if ALPN ID |proto| of length |len| is supported HTTP/2
-// protocol identifier.
-bool check_h2_is_selected(const unsigned char *alpn, size_t len);
+// Returns true if ALPN ID |proto| is supported HTTP/2 protocol
+// identifier.
+bool check_h2_is_selected(const StringRef &proto);
 
 // Selects h2 protocol ALPN ID if one of supported h2 versions are
 // present in |in| of length inlen.  Returns true if h2 version is
@@ -525,19 +555,16 @@ bool select_protocol(const unsigned char **out, unsigned char *outlen,
 // HTTP/2 protocol identifier.
 std::vector<unsigned char> get_default_alpn();
 
-template <typename T> using Range = std::pair<T, T>;
-
 // Parses delimited strings in |s| and returns the array of substring,
 // delimited by |delim|.  The any white spaces around substring are
 // treated as a part of substring.
-std::vector<std::string> parse_config_str_list(const char *s, char delim = ',');
+std::vector<std::string> parse_config_str_list(const StringRef &s,
+                                               char delim = ',');
 
-// Parses delimited strings in |s| and returns the array of pointers,
-// each element points to the beginning and one beyond last of
-// substring in |s|.  The delimiter is given by |delim|.  The any
-// white spaces around substring are treated as a part of substring.
-std::vector<Range<const char *>> split_config_str_list(const char *s,
-                                                       char delim);
+// Parses delimited strings in |s| and returns Substrings in |s|
+// delimited by |delim|.  The any white spaces around substring are
+// treated as a part of substring.
+std::vector<StringRef> split_str(const StringRef &s, char delim);
 
 // Returns given time |tp| in Common Log format (e.g.,
 // 03/Jul/2014:00:19:38 +0900)
@@ -589,12 +616,17 @@ bool ipv6_numeric_addr(const char *host);
 // 1024 and 1024 * 1024 respectively.  If there is an error, returns
 // -1.
 int64_t parse_uint_with_unit(const char *s);
+// The following overload does not require |s| is NULL terminated.
+int64_t parse_uint_with_unit(const uint8_t *s, size_t len);
+int64_t parse_uint_with_unit(const StringRef &s);
 
 // Parses NULL terminated string |s| as unsigned integer and returns
 // the parsed integer.  If there is an error, returns -1.
 int64_t parse_uint(const char *s);
+// The following overload does not require |s| is NULL terminated.
 int64_t parse_uint(const uint8_t *s, size_t len);
 int64_t parse_uint(const std::string &s);
+int64_t parse_uint(const StringRef &s);
 
 // Parses NULL terminated string |s| as unsigned integer and returns
 // the parsed integer casted to double.  If |s| ends with "s", the
@@ -604,6 +636,9 @@ int64_t parse_uint(const std::string &s);
 // unit is second.  This function returns
 // std::numeric_limits<double>::infinity() if error occurs.
 double parse_duration_with_unit(const char *s);
+// The following overload does not require |s| is NULL terminated.
+double parse_duration_with_unit(const uint8_t *s, size_t len);
+double parse_duration_with_unit(const StringRef &s);
 
 // Returns string representation of time duration |t|.  If t has
 // fractional part (at least more than or equal to 1e-3), |t| is
@@ -623,7 +658,11 @@ std::string format_duration(double t);
 // Creates "host:port" string using given |host| and |port|.  If
 // |host| is numeric IPv6 address (e.g., ::1), it is enclosed by "["
 // and "]".  If |port| is 80 or 443, port part is omitted.
-std::string make_hostport(const char *host, uint16_t port);
+std::string make_http_hostport(const StringRef &host, uint16_t port);
+
+// Just like make_http_hostport(), but doesn't treat 80 and 443
+// specially.
+std::string make_hostport(const StringRef &host, uint16_t port);
 
 // Dumps |src| of length |len| in the format similar to `hexdump -C`.
 void hexdump(FILE *out, const uint8_t *src, size_t len);
@@ -664,6 +703,11 @@ std::string random_alpha_digit(Generator &gen, size_t len) {
         gen)];
   }
   return res;
+}
+
+template <typename OutputIterator, typename CharT, size_t N>
+OutputIterator copy_lit(OutputIterator it, CharT(&s)[N]) {
+  return std::copy_n(s, N - 1, it);
 }
 
 } // namespace util

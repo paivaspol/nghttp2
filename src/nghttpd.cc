@@ -223,7 +223,6 @@ int main(int argc, char **argv) {
     int option_index = 0;
     int c = getopt_long(argc, argv, "DVb:c:d:ehm:n:p:va:w:W:", long_options,
                         &option_index);
-    char *end;
     if (c == -1) {
       break;
     }
@@ -256,11 +255,12 @@ int main(int argc, char **argv) {
       config.max_concurrent_streams = n;
       break;
     }
-    case 'n':
+    case 'n': {
 #ifdef NOTHREADS
       std::cerr << "-n: WARNING: Threading disabled at build time, "
                 << "no threads created." << std::endl;
 #else
+      char *end;
       errno = 0;
       config.num_worker = strtoul(optarg, &end, 10);
       if (errno == ERANGE || *end != '\0' || config.num_worker == 0) {
@@ -269,6 +269,7 @@ int main(int argc, char **argv) {
       }
 #endif // NOTHREADS
       break;
+    }
     case 'h':
       print_help(std::cout);
       exit(EXIT_SUCCESS);
@@ -418,6 +419,15 @@ int main(int argc, char **argv) {
       std::cerr << "--mime-types-file: Could not open mime types file: "
                 << config.mime_types_file << std::endl;
     }
+  }
+
+  auto &trailer_names = config.trailer_names;
+  for (auto &h : config.trailer) {
+    trailer_names += h.name;
+    trailer_names += ", ";
+  }
+  if (trailer_names.size() >= 2) {
+    trailer_names.resize(trailer_names.size() - 2);
   }
 
   set_color_output(color || isatty(fileno(stdout)));
