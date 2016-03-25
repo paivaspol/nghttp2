@@ -1127,7 +1127,7 @@ int nghttp2_session_close_stream(nghttp2_session *session, int32_t stream_id,
   nghttp2_mem *mem;
   int is_my_stream_id;
 
-  printf("[nghttp2_session] closing stream\n");
+  printf("[nghttp2_session] closing stream %" PRId32 "\n", stream_id);
 
   mem = &session->mem;
   stream = nghttp2_session_get_stream(session, stream_id);
@@ -2811,7 +2811,7 @@ static int session_after_frame_sent1(nghttp2_session *session) {
             (stream->shut_flags & NGHTTP2_SHUT_RDWR) == NGHTTP2_SHUT_RDWR;
 
         nghttp2_stream_shutdown(stream, NGHTTP2_SHUT_WR);
-        printf("[nghttp2_session] 2677\n");
+        // printf("[nghttp2_session] 2677\n");
         rv = nghttp2_session_close_stream_if_shut_rdwr(session, stream);
         if (nghttp2_is_fatal(rv)) {
           return rv;
@@ -4097,7 +4097,7 @@ int nghttp2_session_on_rst_stream_received(nghttp2_session *session,
                                            nghttp2_frame *frame) {
   int rv;
   nghttp2_stream *stream;
-  printf("[nghttp2_session] RST STREAM received\n");
+  printf("[nghttp2_session] RST STREAM received on %" PRId32 "\n", frame->hd.stream_id);
   if (frame->hd.stream_id == 0) {
     return session_handle_invalid_connection(session, frame, NGHTTP2_ERR_PROTO,
                                              "RST_STREAM: stream_id == 0");
@@ -4825,7 +4825,6 @@ int nghttp2_session_on_data_received(nghttp2_session *session,
   }
 
   if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
-    printf("[nghttp2_session] FLAG_END_STREAM\n");
     nghttp2_stream_shutdown(stream, NGHTTP2_SHUT_RD);
     rv = nghttp2_session_close_stream_if_shut_rdwr(session, stream);
     if (nghttp2_is_fatal(rv)) {
@@ -6896,7 +6895,10 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
        NGHTTP2_FLAG_END_STREAM */
     if ((aux_data->flags & NGHTTP2_FLAG_END_STREAM) &&
         (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM) == 0 &&
-        stream->still_have_dependencies) {
+        // ADDITIONAL
+        stream->still_have_dependencies == 0) {
+        // END ADDITIONAL
+      printf("Sending FLAG_END_STREAM\n");
       frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
     }
   }
@@ -7397,15 +7399,24 @@ int nghttp2_session_has_open_dependency_stream(nghttp2_session *session) {
 int nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *session, int32_t stream_id) {
   nghttp2_stream *stream;
   stream = nghttp2_session_get_stream(session, stream_id);
-
   if (!stream) {
     return -1;
   }
-
   if (!stream->still_have_dependencies) {
     return -1;
   }
-
   return 0;
+}
+
+void nghttp2_session_set_still_have_dependencies(nghttp2_session *session,
+                                                 int32_t stream_id,
+                                                 int8_t result) {
+  nghttp2_stream *stream;
+  stream = nghttp2_session_get_stream(session, stream_id);
+  if (stream != NULL) {
+    nghttp2_stream_set_still_have_dependencies(stream, result);
+  } else {
+    printf("stream_id: %" PRId32 " is NULL\n");
+  }
 }
 // END ADDITIONAL

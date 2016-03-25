@@ -4846,6 +4846,11 @@ nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
 NGHTTP2_EXTERN int 
 nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *session,
                                                      int32_t stream_id);
+
+NGHTTP2_EXTERN void
+nghttp2_session_set_still_have_dependencies(nghttp2_session *session,
+                                            int32_t stream_id,
+                                            int8_t result);
 // END ADDITIONAL
 
 #ifdef __cplusplus

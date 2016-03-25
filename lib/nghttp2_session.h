@@ -352,6 +352,10 @@ int nghttp2_session_is_my_stream_id(nghttp2_session *session,
  * Returns whether the session already has a dependency stream.
  */
 int nghttp2_session_has_open_dependency_stream(nghttp2_session *session);
+
+void nghttp2_session_set_still_have_dependencies(nghttp2_session *session,
+                                                 int32_t stream_id,
+                                                 int8_t result);
 // END ADDITIONAL
 
 /*

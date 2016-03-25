@@ -90,7 +90,9 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
                            nghttp2_data_source *source, void *user_data) {
   std::cout << "[dep_reader.cc] READ CALLBACK" << std::endl;
   auto dependencies = static_cast<std::deque<std::string> *>(source->ptr);
+  std::cout << "after dereferencing" << std::endl;
   if (!dependencies->empty()) {
+    std::cout << "In not empty" << std::endl;
     /*
      * TODO: Can optimize using a greedy approach where
      * the list is sorted by the length of the dependency URL.
@@ -108,8 +110,10 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
       dependencies->pop_front();
     }
 
+    std::cout << "before memcpy" << std::endl;
     /* Pack result string to uint8_t format. */
     std::memcpy(buf, result_str.c_str(), result_str.length() + 1);
+    std::cout << "before returning" << std::endl;
     return result_str.length() + 1; // Account for the NULL terminal.
   } else {
     return 0;
