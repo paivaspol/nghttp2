@@ -100,14 +100,18 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
     size_t cumulative_size_read = dependencies->front().size();
     size_t length_left = length;
     std::string result_str = "";
-    while (length_left - dependencies->front().size()  > 0 &&
-           !dependencies->empty()) {
+    while (!dependencies->empty() &&
+           length_left - dependencies->front().size()  > 0) {
       std::string dependency = dependencies->front();
       // std::cout << "dependency: " << dependency << " dep_len: " << dependency.length() << std::endl;
+      std::cout << "[dep_reader.cc] Trying to dereference dependency" << std::endl;
       cumulative_size_read += dependency.length();
+      std::cout << "[dep_reader.cc] After trying to dereference dependency" << std::endl;
       length_left -= dependency.length();
       result_str += dependency + "\n";
+      std::cout << "[dep_reader.cc] Popping dependencies" << std::endl;
       dependencies->pop_front();
+      std::cout << "[dep_reader.cc] After popping dependencies" << std::endl;
     }
 
     std::cout << "before memcpy" << std::endl;

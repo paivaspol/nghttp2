@@ -1576,7 +1576,7 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
   }
 
   // ADDITIONAL
-  std::cout << "[Http2Upstream.cc] submitted response " << std::endl;
+  std::cout << "[Http2Upstream.cc] submitted response for " << req.path << " with status: " << resp.http_status << std::endl;
   dep_reader_.StartReturningDependencies();
   // Prepare the stream for DEPENDENCY frames.
   // Open the dependency stream.
