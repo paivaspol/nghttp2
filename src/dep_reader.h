@@ -51,6 +51,16 @@ class DependencyReader {
   std::deque<std::string> *ReadDependencies();
 
   /*
+   * Returns the number of dependencies remanining.
+   */
+  uint32_t num_dependencies_remaining();
+
+  /*
+   * Returns whether the reader still _currently_ have dependencies.
+   */
+  bool still_have_dependencies();
+
+  /*
    * Returns a nghttp2_data_provider containing the dependencies.
    */
   nghttp2_data_provider GetDependenciesDataProvider();

@@ -2187,7 +2187,6 @@ static int session_prep_frame(nghttp2_session *session,
   } 
   // ADDITIONAL
   else if (frame->hd.type == EXT_DEPENDENCY) {
-    printf("[nghttp2_session] DEPENDENCY FRAME!\n");
     size_t next_readmax;
     nghttp2_stream *stream;
 
@@ -2195,7 +2194,6 @@ static int session_prep_frame(nghttp2_session *session,
     printf("[nghttp2_session] stream: %d\n", frame->hd.stream_id);
 
     rv = nghttp2_session_predicate_data_send(session, stream);
-    printf("[nghttp2_session] here(-1) %d\n", rv);
     if (rv != 0) {
       // If stream was already closed, nghttp2_session_get_stream()
       // returns NULL, but item is still attached to the stream.
@@ -3679,7 +3677,7 @@ static int session_end_stream_headers_received(nghttp2_session *session,
     return 0;
   }
 
-  printf("[nghttp2_session] end stream headers received\n");
+  printf("[nghttp2_session] end stream headers received for stream: %" PRId32 "\n", frame->hd.stream_id);
   nghttp2_stream_shutdown(stream, NGHTTP2_SHUT_RD);
   rv = nghttp2_session_close_stream_if_shut_rdwr(session, stream);
   if (nghttp2_is_fatal(rv)) {
@@ -6898,7 +6896,7 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
         // ADDITIONAL
         stream->still_have_dependencies == 0) {
         // END ADDITIONAL
-      printf("Sending FLAG_END_STREAM\n");
+      printf("[nghttp2_session.c] Sending FLAG_END_STREAM for stream: %" PRId32 "\n", frame->hd.stream_id);
       frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
     }
   }

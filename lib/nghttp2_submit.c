@@ -571,7 +571,6 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   frame = &item->frame;
   // printf("[nghttp2_submit] (7)\n");
   
-  // TODO: Fix the dependency stream id.
   ext_frame_dependency_init(&frame->dependency, flags, stream_id, -1);
   // printf("[nghttp2_submit] (8)\n");
   rv = nghttp2_session_add_item(session, item);
@@ -583,7 +582,7 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   }
   session->has_opened_dependency_stream = 1;
   // printf("[nghttp2_submit] (10) dependency_stream_id: %d\n", -1);
-  return dependency_stream_id;
+  return 0;
 }
 // END ADDITIONAL
 

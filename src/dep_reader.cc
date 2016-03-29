@@ -32,6 +32,7 @@ void DependencyReader::Start() {
   std::ifstream infile("temp.txt");
   std::string line;
   while (std::getline(infile, line)) {
+    std::cout << "[dep_reader.cc] Line: " << line << std::endl;
     dependencies_.push_back(line);
   } 
 }
@@ -78,50 +79,41 @@ size_t DependencyReader::GetDependenciesRaw(uint8_t *buf) {
 }
 
 nghttp2_data_provider DependencyReader::GetDependenciesDataProvider() {
+  std::cout << "[dep_reader.cc] Creating data provider." << std::endl;
   nghttp2_data_provider *provider = new nghttp2_data_provider();
-  provider->source.ptr = reinterpret_cast<void *>(ReadDependencies());
+  std::cout << "[dep_reader.cc] Dependencies front: " << dependencies_.front() << std::endl;
+  std::string *dependency = new std::string(dependencies_.front());
+  std::cout << "[dep_reader.cc] Creating string instance." << std::endl;
+  provider->source.ptr = reinterpret_cast<void *>(dependency);
   provider->read_callback = dependency_read_callback;
   std::cout << "[dep_reader.cc] Got the data provider." << std::endl;
+  dependencies_.pop_front();
   return *provider;
+}
+
+uint32_t DependencyReader::num_dependencies_remaining() {
+  return dependencies_.size();
+}
+
+bool DependencyReader::still_have_dependencies() {
+  return !dependencies_.empty();
 }
 
 ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
                            uint8_t *buf, size_t length, uint32_t *data_flags,
                            nghttp2_data_source *source, void *user_data) {
-  std::cout << "[dep_reader.cc] READ CALLBACK" << std::endl;
-  auto dependencies = static_cast<std::deque<std::string> *>(source->ptr);
-  std::cout << "after dereferencing" << std::endl;
-  if (!dependencies->empty()) {
-    std::cout << "In not empty" << std::endl;
-    /*
-     * TODO: Can optimize using a greedy approach where
-     * the list is sorted by the length of the dependency URL.
-     */
-    size_t cumulative_size_read = dependencies->front().size();
-    size_t length_left = length;
-    std::string result_str = "";
-    while (!dependencies->empty() &&
-           length_left - dependencies->front().size()  > 0) {
-      std::string dependency = dependencies->front();
-      // std::cout << "dependency: " << dependency << " dep_len: " << dependency.length() << std::endl;
-      std::cout << "[dep_reader.cc] Trying to dereference dependency" << std::endl;
-      cumulative_size_read += dependency.length();
-      std::cout << "[dep_reader.cc] After trying to dereference dependency" << std::endl;
-      length_left -= dependency.length();
-      result_str += dependency + "\n";
-      std::cout << "[dep_reader.cc] Popping dependencies" << std::endl;
-      dependencies->pop_front();
-      std::cout << "[dep_reader.cc] After popping dependencies" << std::endl;
-    }
-
-    std::cout << "before memcpy" << std::endl;
-    /* Pack result string to uint8_t format. */
-    std::memcpy(buf, result_str.c_str(), result_str.length() + 1);
-    std::cout << "before returning" << std::endl;
-    return result_str.length() + 1; // Account for the NULL terminal.
-  } else {
-    return 0;
-  }
+  auto dependency = static_cast<std::string *>(source->ptr);
+  std::cout << "[dep_reader.cc] READ CALLBACK for " << *dependency << std::endl;
+  // std::cout << "after dereferencing" << std::endl;
+  size_t length_left = length;
+  ssize_t dependency_length = dependency->length();
+  // std::cout << "before memcpy" << std::endl;
+  /* Pack result string to uint8_t format. */
+  std::memcpy(buf, dependency->c_str(), dependency_length + 1);
+  // std::cout << "before returning" << std::endl;
+  delete dependency;
+  source->ptr = NULL;
+  return dependency_length + 1; // Account for the NULL terminal.
 }
 
 } // namespace shrpx

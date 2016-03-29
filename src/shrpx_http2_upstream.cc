@@ -1563,10 +1563,10 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     }
   }
 
-  nghttp2_data_provider dependency_data_provider = 
-                            dep_reader_.GetDependenciesDataProvider();
-  nghttp2_data_provider *dependency_data_provider_ptr = 
-                            &dependency_data_provider;
+  // nghttp2_data_provider dependency_data_provider = 
+  //                           dep_reader_.GetDependenciesDataProvider();
+  // nghttp2_data_provider *dependency_data_provider_ptr = 
+  //                           &dependency_data_provider;
 
   rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
                                nva.data(), nva.size(), data_prdptr);
@@ -2058,16 +2058,20 @@ void Http2Upstream::on_new_dependency_callback() {
   if (did_sent_dependency_) {
     return;
   }
-  int32_t stream_id = dep_reader_.stream_id();
-  nghttp2_data_provider dependency_data_provider = 
-    dep_reader_.GetDependenciesDataProvider();
-  nghttp2_data_provider *dependency_data_provider_ptr = &dependency_data_provider;
-  if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
-      stream_id, dependency_data_provider_ptr) == 0) {
-    std::cout << "submitted dependencies" << std::endl;
-  } else {
-    std::cout << "submitted dependencies failed" << std::endl;
+  while (dep_reader_.still_have_dependencies()) {
+    std::cout << "[shrpx_http2_upstream.cc] submitting dependency with remaining: " << dep_reader_.num_dependencies_remaining() << std::endl;
+    int32_t stream_id = dep_reader_.stream_id();
+    nghttp2_data_provider dependency_data_provider = 
+      dep_reader_.GetDependenciesDataProvider();
+    nghttp2_data_provider *dependency_data_provider_ptr = &dependency_data_provider;
+    if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
+        stream_id, dependency_data_provider_ptr) == 0) {
+      std::cout << "submitted dependencies" << std::endl;
+    } else {
+      std::cout << "submitted dependencies failed" << std::endl;
+    }
   }
+  on_all_dependencies_discovered_callback();
 }
 
 void Http2Upstream::on_all_dependencies_discovered_callback() {
