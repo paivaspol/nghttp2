@@ -46,11 +46,6 @@ class DependencyReader {
   void set_stream_id(int32_t stream_id) { stream_id_ = stream_id; };
 
   /*
-   * Returns a deque containing the dependencies.
-   */
-  std::deque<std::string> *ReadDependencies();
-
-  /*
    * Returns the number of dependencies remanining.
    */
   uint32_t num_dependencies_remaining();
@@ -65,17 +60,18 @@ class DependencyReader {
    */
   nghttp2_data_provider GetDependenciesDataProvider();
 
-  /*
-   * Returns the size of the dependencies.
-   */
-  size_t GetDependenciesRaw(uint8_t *buf);
- 
+ private: 
+  // Tokenize the line into a pair, where the first argument of the pair contains
+  // parent and the second argument of the pair contains the child.
+  std::pair<std::string, std::string> TokenizeTree(std::string line);
+
   bool can_start_notifying_upstream_; 
   int32_t stream_id_;
-  std::deque<std::string> dependencies_;
+  // std::deque<std::string> dependencies_;
   std::string url_;
   std::function<void(void)> on_new_dependency_callback_;
   std::function<void(void)> on_all_dependencies_discovered_;
+  std::deque<std::pair<std::string, std::string>> dependencies_;
 };
 
 /*

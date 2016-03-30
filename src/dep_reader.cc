@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 #include <nghttp2/nghttp2.h>
 
@@ -33,60 +34,34 @@ void DependencyReader::Start() {
   std::string line;
   while (std::getline(infile, line)) {
     std::cout << "[dep_reader.cc] Line: " << line << std::endl;
-    dependencies_.push_back(line);
+    dependencies_.push_back(TokenizeTree(line));
   } 
+}
+
+std::pair<std::string, std::string> DependencyReader::TokenizeTree(std::string line) {
+  std::stringstream ss(line);
+  std::deque<std::string> tokenized_str;
+  std::string token;
+  while (getline(ss, token, ' ')) {
+    tokenized_str.push_back(token);
+  }
+  return std::make_pair(tokenized_str[0], tokenized_str[1]);
 }
 
 void DependencyReader::StartReturningDependencies() {
   can_start_notifying_upstream_ = true;
   if (!dependencies_.empty()) {
     on_new_dependency_callback_();
-    on_all_dependencies_discovered_();
-  }
-}
-
-std::deque<std::string> *DependencyReader::ReadDependencies() {
-  std::deque<std::string> *result = new std::deque<std::string>();
-  std::ifstream infile("temp.txt");
-  std::string line;
-  while (std::getline(infile, line)) {
-    result->push_back(line);
-  } 
-  return result;
-}
-
-size_t DependencyReader::GetDependenciesRaw(uint8_t *buf) {
-  std::deque<std::string> *dependencies = ReadDependencies();
-  if (!dependencies->empty()) {
-    std::string result_str = "";
-    size_t cumulative_size_read = 0;
-    for (std::deque<std::string>::iterator it = dependencies->begin();
-        it != dependencies->end(); it++) {
-      std::string dependency = *it;
-      dependencies->pop_front();
-      result_str += dependency + "\n";
-      cumulative_size_read += dependency.size() + 1;
-    }
-
-    /* Pack result string to uint8_t format. */
-    char *cstr = new char[result_str.length() + 1];
-    std::strcpy(cstr, result_str.c_str());
-    buf = reinterpret_cast<uint8_t *>(cstr);
-    return cumulative_size_read + 1; // Account for the NULL terminal.
-  } else {
-    return 0;
   }
 }
 
 nghttp2_data_provider DependencyReader::GetDependenciesDataProvider() {
   std::cout << "[dep_reader.cc] Creating data provider." << std::endl;
   nghttp2_data_provider *provider = new nghttp2_data_provider();
-  std::cout << "[dep_reader.cc] Dependencies front: " << dependencies_.front() << std::endl;
-  std::string *dependency = new std::string(dependencies_.front());
-  std::cout << "[dep_reader.cc] Creating string instance." << std::endl;
+  std::pair<std::string, std::string> *dependency = 
+    new std::pair<std::string, std::string>(dependencies_.front());
   provider->source.ptr = reinterpret_cast<void *>(dependency);
   provider->read_callback = dependency_read_callback;
-  std::cout << "[dep_reader.cc] Got the data provider." << std::endl;
   dependencies_.pop_front();
   return *provider;
 }
@@ -102,18 +77,20 @@ bool DependencyReader::still_have_dependencies() {
 ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
                            uint8_t *buf, size_t length, uint32_t *data_flags,
                            nghttp2_data_source *source, void *user_data) {
-  auto dependency = static_cast<std::string *>(source->ptr);
-  std::cout << "[dep_reader.cc] READ CALLBACK for " << *dependency << std::endl;
+  auto dependency = static_cast<std::pair<std::string, std::string> *>(source->ptr);
+  std::cout << "[dep_reader.cc] READ CALLBACK for " << dependency->second << std::endl;
   // std::cout << "after dereferencing" << std::endl;
   size_t length_left = length;
-  ssize_t dependency_length = dependency->length();
+  ssize_t parent_length = dependency->first.length();
+  ssize_t dependency_length = dependency->second.length();
   // std::cout << "before memcpy" << std::endl;
   /* Pack result string to uint8_t format. */
-  std::memcpy(buf, dependency->c_str(), dependency_length + 1);
+  std::string result = dependency->first + "\n" + dependency->second;
+  std::memcpy(buf, result.c_str(), result.length() + 1);
   // std::cout << "before returning" << std::endl;
   delete dependency;
   source->ptr = NULL;
-  return dependency_length + 1; // Account for the NULL terminal.
+  return parent_length + dependency_length + 2; // Account for the NULL terminal.
 }
 
 } // namespace shrpx

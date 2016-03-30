@@ -1563,11 +1563,6 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     }
   }
 
-  // nghttp2_data_provider dependency_data_provider = 
-  //                           dep_reader_.GetDependenciesDataProvider();
-  // nghttp2_data_provider *dependency_data_provider_ptr = 
-  //                           &dependency_data_provider;
-
   rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
                                nva.data(), nva.size(), data_prdptr);
   if (rv != 0) {
