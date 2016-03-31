@@ -7398,12 +7398,12 @@ int nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *sessio
   nghttp2_stream *stream;
   stream = nghttp2_session_get_stream(session, stream_id);
   if (!stream) {
-    return -1;
+    return 0;
   }
   if (!stream->still_have_dependencies) {
-    return -1;
+    return 0;
   }
-  return 0;
+  return 1;
 }
 
 void nghttp2_session_set_still_have_dependencies(nghttp2_session *session,
