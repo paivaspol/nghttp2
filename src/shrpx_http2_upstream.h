@@ -119,9 +119,10 @@ public:
 
   // ADDITIONAL
   int on_dependency_received();
-  void on_new_dependency_callback();
-  void on_all_dependencies_discovered_callback();
+  void on_new_dependency_callback(std::string url, int32_t stream_id);
+  void on_all_dependencies_discovered_callback(std::string url, int32_t stream_id);
   void start_resolving_dependencies(std::string url, int32_t stream_id);
+  std::string construct_url(const struct Request& request);
   // END ADDITIONAL
 
   DefaultMemchunks *get_response_buf();
