@@ -1577,9 +1577,13 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
   }
 
   // ADDITIONAL
-  std::cout << "[Http2Upstream.cc] submitted response for " << req.path << " with status: " << resp.http_status << " on stream: " << downstream->get_stream_id() << std::endl;
-  if (nghttp2_session_should_resolve_dependency_for_stream(session_, downstream->get_stream_id())) {
-    dep_reader_.StartReturningDependencies(construct_url(req));
+  auto stream_id = downstream->get_stream_id();
+  std::cout << "[Http2Upstream.cc] submitted response for " << req.path << " with status: " << resp.http_status << " on stream: " << stream_id << " requesting deps: " << nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) << std::endl;
+  if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id)) {
+    if (!dep_reader_.StartReturningDependencies(construct_url(req))) {
+      // Set the stream state to be finished with dependencies.
+      on_all_dependencies_discovered_callback(construct_url(req), stream_id);
+    }
   }
   // END ADDITIONAL
 

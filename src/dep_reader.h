@@ -21,13 +21,15 @@ class DependencyReader {
   /*
    * Starts the DependencyReader, but all the callbacks are not enabled unless 
    * the reader is enabled to return the dependencies.
+   * Returns |true| when the url has dependencies toresolve.
+   * Otherwise, return |false|
    */
   void Start(std::string website);
 
   /*
    * Enables the DependencyReader to notify about the dependencies via the callback.
    */
-  void StartReturningDependencies(std::string url);
+  bool StartReturningDependencies(std::string url);
 
   void set_on_new_dependency_callback(
       std::function<void(std::string, int32_t)> on_new_dependency_callback) {

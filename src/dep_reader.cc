@@ -30,13 +30,17 @@ void DependencyReader::Start(const std::string website) {
       base_dependency_directory_, EscapeURL(website));
 }
 
-void DependencyReader::StartReturningDependencies(const std::string url) {
-  assert(outstanding_dependencies_to_stream_id_.count(url) > 0);
+bool DependencyReader::StartReturningDependencies(const std::string url) {
+  if (outstanding_dependencies_to_stream_id_.count(url) == 0) {
+    // The URL doesn't have any dependent resources.
+    return false;
+  }
 
   can_start_notifying_upstream_[url] = true;
   if (!dependencies_.empty()) {
     on_new_dependency_callback_(url, outstanding_dependencies_to_stream_id_[url]);
   }
+  return true;
 }
 
 nghttp2_data_provider DependencyReader::GetDependenciesDataProvider(
@@ -71,7 +75,7 @@ void DependencyReader::RegisterForGettingDependencies(const std::string url,
                                                       int32_t stream_id) {
   std::cout << "[dep_reader.cc] Registering url: " << url << std::endl;
   if (dependencies_.count(url) == 0) {
-    std::cout << "[dep_reader.cc] somehow the depedencies count == 0 for " << url << std::endl;
+    // There aren't any dependencies for this URL.
     return;
   }
 
@@ -110,6 +114,7 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
   std::ifstream infile(dependency_tree_filename);
   std::string line;
   while (std::getline(infile, line)) {
+    std::cout << "[dep_reader.cc] dep line: " << line << std::endl;
     auto dependency_line = TokenizeTree(line);
     std::string origin = std::get<0>(dependency_line);
     std::string parent = std::get<1>(dependency_line);
