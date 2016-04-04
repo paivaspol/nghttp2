@@ -225,6 +225,11 @@ struct nghttp2_stream {
      is not queued. */
   uint8_t window_update_queued;
   // ADDITIONAL
+  /* This flag indicates that the last byte of the data is sent. 
+   * This flag can be used in conjunction with |still_have_dependencies|
+   * to determine whether |NGHTTP2_FLAG_END_STREAM| should be set. */
+  uint8_t done_with_last_data_byte;
+   
   /* This flag is used to indicate whether the stream is expecting
      additional dependencies from the dependency reader. */
   uint8_t still_have_dependencies;

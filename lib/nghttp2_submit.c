@@ -531,6 +531,7 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   nghttp2_mem *mem;
   int rv;
   int32_t dependency_stream_id;
+  uint8_t nflags = flags & NGHTTP2_FLAG_END_STREAM;
   nghttp2_stream *stream;
 
   mem = &session->mem;
@@ -565,6 +566,7 @@ int nghttp2_submit_dependency(nghttp2_session *session, uint8_t flags,
   // printf("[nghttp2_submit] dereferencing data_prd\n");
   nghttp2_data_provider data = *data_prd;
   item->aux_data.data.data_prd = *data_prd;
+  item->aux_data.data.flags = nflags;
 
   // printf("[nghttp2_submit] (5)\n");
   // printf("[nghttp2_submit] (6)\n");

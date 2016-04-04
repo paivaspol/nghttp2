@@ -318,6 +318,11 @@ int Http2Upstream::on_request_headers(Downstream *downstream,
     req.scheme = scheme->value;
   }
 
+  // TODO: hack
+  if (req.scheme.str().empty()) {
+    req.scheme = StringRef("https");
+  }
+
   // nghttp2 library guarantees either :authority or host exist
   if (!authority) {
     req.no_authority = true;
@@ -398,7 +403,7 @@ void Http2Upstream::start_downstream(Downstream *downstream) {
     initiate_downstream(downstream);
     return;
   }
-
+  std::cout << "[http2_upstream.cc] blocking downstream" << std::endl;
   downstream_queue_.mark_blocked(downstream);
 }
 
@@ -953,7 +958,6 @@ Http2Upstream::Http2Upstream(ClientHandler *handler)
                 this,
                 std::placeholders::_1,
                 std::placeholders::_2));
-  did_sent_dependency_ = false;
   // END ADDITIONAL
 }
 
@@ -2058,17 +2062,19 @@ int Http2Upstream::on_dependency_received() {
 
 void Http2Upstream::on_new_dependency_callback(const std::string url, 
                                                int32_t stream_id) {
-  std::cout << "[shrpx_http2_upstream.cc] new dependency callback" << std::endl;
+  std::cout << "[shrpx_http2_upstream.cc] new dependency callback for url: " << url << std::endl;
   // Here is where we would like to submit dependency frames.
-  if (did_sent_dependency_) {
-    return;
-  }
   while (dep_reader_.still_have_dependencies(url)) {
     std::cout << "[shrpx_http2_upstream.cc] submitting dependency with remaining: " << dep_reader_.num_dependencies_remaining(url) << std::endl;
     nghttp2_data_provider dependency_data_provider = 
       dep_reader_.GetDependenciesDataProvider(url);
     nghttp2_data_provider *dependency_data_provider_ptr = &dependency_data_provider;
-    if (nghttp2_submit_dependency(session_, EXT_DEPENDENCY_FLAG_INIT,
+    uint8_t flag = NGHTTP2_FLAG_NONE;
+    if (!dep_reader_.still_have_dependencies(url)) {
+      // When the last dependency is about to be sent.
+      flag |= NGHTTP2_FLAG_END_STREAM;
+    }
+    if (nghttp2_submit_dependency(session_, flag,
         stream_id, dependency_data_provider_ptr) == 0) {
       std::cout << "submitted dependencies" << std::endl;
     } else {
@@ -2082,7 +2088,6 @@ void Http2Upstream::on_all_dependencies_discovered_callback(std::string url,
                                                             int32_t stream_id) {
   std::cout << "[shrpx_http2_upstream.cc] all dependencies discovered callback with stream id: " << stream_id << std::endl;
   // Allow the stream to sent END_STREAM flag.
-  did_sent_dependency_ = true;
   nghttp2_session_set_still_have_dependencies(session_, stream_id, 0);
 }
 

@@ -1020,4 +1020,13 @@ void nghttp2_stream_set_still_have_dependencies(nghttp2_stream *stream,
 uint8_t nghttp2_stream_still_have_dependencies(nghttp2_stream *stream) {
   return stream->still_have_dependencies;
 }
+
+void nghttp2_stream_set_done_with_last_data_byte(nghttp2_stream *stream,
+                                                 uint8_t done_with_last_data_byte) {
+  stream->done_with_last_data_byte = done_with_last_data_byte;
+}
+
+void nghttp2_stream_done_with_last_data_byte(nghttp2_stream *stream) {
+  return stream->done_with_last_data_byte;
+}
 // END ADDITIONAL

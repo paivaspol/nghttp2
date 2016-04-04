@@ -2699,6 +2699,7 @@ static int session_after_frame_sent1(nghttp2_session *session) {
       break;
     }
     case NGHTTP2_RST_STREAM:
+      printf("[nghttp2_session] Received RST_STREAM on stream %" PRIu32 "\n");
       rv = nghttp2_session_close_stream(session, frame->hd.stream_id,
                                         frame->rst_stream.error_code);
       if (nghttp2_is_fatal(rv)) {
@@ -6778,12 +6779,18 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
   nghttp2_put_uint32be(buf->last, frame->dependency.dependency_stream_id);
   buf->last += sizeof(uint32_t);
 
-
   data_flags = NGHTTP2_DATA_FLAG_NONE;
   payloadlen = aux_data->data_prd.read_callback(
       session, frame->hd.stream_id, buf->last, datamax, &data_flags,
       &aux_data->data_prd.source, session->user_data);
   buf->last += payloadlen;
+
+  printf("[nghttp2_session.c] pack dependency END_STREAM %" PRIu8 "\n", aux_data->flags);
+  if ((aux_data->flags & NGHTTP2_FLAG_END_STREAM) &&
+      nghttp2_stream_done_with_last_data_byte(stream)) {
+    printf("[nghttp2_session.c] setting end stream for dependency frame.\n");
+    frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
+  }
   
   payloadlen += 4 + 4;
   frame->hd.length = (size_t) payloadlen;
@@ -6891,13 +6898,16 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
     aux_data->eof = 1;
     /* If NGHTTP2_DATA_FLAG_NO_END_STREAM is set, don't set
        NGHTTP2_FLAG_END_STREAM */
+    printf("[nghttp2_session.c] pack data END_STREAM %" PRIu8 "\n", aux_data->flags);
     if ((aux_data->flags & NGHTTP2_FLAG_END_STREAM) &&
-        (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM) == 0 &&
+        (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM) == 0)
+        nghttp2_stream_set_done_with_last_data_byte(stream, 1);
+        printf("[nghttp2_session.c] Done with last byte\n");
         // ADDITIONAL
-        stream->still_have_dependencies == 0) {
+        if (stream->still_have_dependencies == 0) {
         // END ADDITIONAL
-      printf("[nghttp2_session.c] Sending FLAG_END_STREAM for stream: %" PRId32 "\n", frame->hd.stream_id);
-      frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
+          printf("[nghttp2_session.c] Sending FLAG_END_STREAM for stream: %" PRId32 "\n", frame->hd.stream_id);
+          frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
     }
   }
 

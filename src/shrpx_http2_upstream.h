@@ -144,7 +144,6 @@ private:
   bool shutdown_handled_;
   // ADDITIONAL
   DependencyReader dep_reader_;
-  bool did_sent_dependency_;
   // END ADDITIONAL
 };
 
