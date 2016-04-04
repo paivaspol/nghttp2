@@ -31,6 +31,7 @@ void DependencyReader::Start(const std::string website) {
 }
 
 bool DependencyReader::StartReturningDependencies(const std::string url) {
+  std::cout << "[dep_reader.cc] Start Returning Dependencies for url: " << url << std::endl;
   if (outstanding_dependencies_to_stream_id_.count(url) == 0) {
     // The URL doesn't have any dependent resources.
     return false;
@@ -79,9 +80,9 @@ void DependencyReader::RegisterForGettingDependencies(const std::string url,
     return;
   }
 
-  outstanding_dependencies_.insert(std::make_pair(url, dependencies_[url]));
-  outstanding_dependencies_to_stream_id_.insert(std::make_pair(url, stream_id));
-  can_start_notifying_upstream_.insert(std::make_pair(url, false));
+  outstanding_dependencies_[url] = dependencies_[url];
+  outstanding_dependencies_to_stream_id_[url] = stream_id;
+  can_start_notifying_upstream_[url] = false;
   std::cout << "[dep_reader.cc] outstanding_dependencies_ size: " << outstanding_dependencies_.size() << std::endl;
   for (auto it = outstanding_dependencies_.begin(); it != outstanding_dependencies_.end(); ++it) {
     std::cout << "[dep_reader.cc] key: " << it->first << " size: " << it->second.size() << std::endl;
