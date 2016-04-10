@@ -597,7 +597,8 @@ typedef enum {
    * The DEPENDENCY frame. It is used to specify the dependency that
    * will be discovered in the future.
    */
-  EXT_DEPENDENCY = 0x0C
+  EXT_DEPENDENCY = 0x0C,
+   /**
    * The ALTSVC frame, which is defined in `RFC 7383
    * <https://tools.ietf.org/html/rfc7838#section-4>`_.
    */
