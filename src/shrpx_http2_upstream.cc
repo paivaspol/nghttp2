@@ -410,9 +410,9 @@ void Http2Upstream::start_downstream(Downstream *downstream) {
 void Http2Upstream::initiate_downstream(Downstream *downstream) {
   int rv;
 
-  rv = downstream->attach_downstream_connection(
-      handler_->get_downstream_connection(downstream));
-  if (rv != 0) {
+  auto dconn = handler_->get_downstream_connection(downstream);
+  if (!dconn ||
+      (rv = downstream->attach_downstream_connection(std::move(dconn))) != 0) {
     // downstream connection fails, send error page
     if (error_reply(downstream, 503) != 0) {
       rst_stream(downstream, NGHTTP2_INTERNAL_ERROR);
@@ -1441,6 +1441,34 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
   }
 #endif // HAVE_MRUBY
 
+  auto &http2conf = get_config()->http2;
+
+  // We need some conditions that must be fulfilled to initiate server
+  // push.
+  //
+  // * Server push is disabled for http2 proxy or client proxy, since
+  //   incoming headers are mixed origins.  We don't know how to
+  //   reliably determine the authority yet.
+  //
+  // * We need non-final response or 200 response code for associated
+  //   resource.  This is too restrictive, we will review this later.
+  //
+  // * We requires GET or POST for associated resource.  Probably we
+  //   don't want to push for HEAD request.  Not sure other methods
+  //   are also eligible for push.
+  if (!http2conf.no_server_push &&
+      nghttp2_session_get_remote_settings(session_,
+                                          NGHTTP2_SETTINGS_ENABLE_PUSH) == 1 &&
+      !get_config()->http2_proxy && (downstream->get_stream_id() % 2) &&
+      resp.fs.header(http2::HD_LINK) &&
+      (downstream->get_non_final_response() || resp.http_status == 200) &&
+      (req.method == HTTP_GET || req.method == HTTP_POST)) {
+
+    if (prepare_push_promise(downstream) != 0) {
+      // Continue to send response even if push was failed.
+    }
+  }
+
   auto nva = std::vector<nghttp2_nv>();
   // 4 means :status and possible server, via and x-http2-push header
   // field.
@@ -1529,8 +1557,6 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     log_response_headers(downstream, nva);
   }
 
-  auto &http2conf = get_config()->http2;
-
   if (http2conf.upstream.debug.dump.response_header) {
     http2::dump_nv(http2conf.upstream.debug.dump.response_header, nva.data(),
                    nva.size());
@@ -1546,31 +1572,6 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     data_prdptr = &data_prd;
   } else {
     data_prdptr = nullptr;
-  }
-
-  // We need some conditions that must be fulfilled to initiate server
-  // push.
-  //
-  // * Server push is disabled for http2 proxy or client proxy, since
-  //   incoming headers are mixed origins.  We don't know how to
-  //   reliably determine the authority yet.
-  //
-  // * We need 200 response code for associated resource.  This is too
-  //   restrictive, we will review this later.
-  //
-  // * We requires GET or POST for associated resource.  Probably we
-  //   don't want to push for HEAD request.  Not sure other methods
-  //   are also eligible for push.
-  if (!http2conf.no_server_push &&
-      nghttp2_session_get_remote_settings(session_,
-                                          NGHTTP2_SETTINGS_ENABLE_PUSH) == 1 &&
-      !get_config()->http2_proxy && (downstream->get_stream_id() % 2) &&
-      resp.fs.header(http2::HD_LINK) && resp.http_status == 200 &&
-      (req.method == HTTP_GET || req.method == HTTP_POST)) {
-
-    if (prepare_push_promise(downstream) != 0) {
-      // Continue to send response even if push was failed.
-    }
   }
 
   rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
@@ -1746,7 +1747,8 @@ void Http2Upstream::log_response_headers(
     Downstream *downstream, const std::vector<nghttp2_nv> &nva) const {
   std::stringstream ss;
   for (auto &nv : nva) {
-    ss << TTY_HTTP_HD << nv.name << TTY_RST << ": " << nv.value << "\n";
+    ss << TTY_HTTP_HD << StringRef{nv.name, nv.namelen} << TTY_RST << ": "
+       << StringRef{nv.value, nv.valuelen} << "\n";
   }
   ULOG(INFO, this) << "HTTP response headers. stream_id="
                    << downstream->get_stream_id() << "\n" << ss.str();
@@ -1797,6 +1799,8 @@ int Http2Upstream::on_downstream_reset(bool no_retry) {
 
     downstream->add_retry();
 
+    std::unique_ptr<DownstreamConnection> dconn;
+
     if (no_retry || downstream->no_more_retry()) {
       goto fail;
     }
@@ -1804,8 +1808,12 @@ int Http2Upstream::on_downstream_reset(bool no_retry) {
     // downstream connection is clean; we can retry with new
     // downstream connection.
 
-    rv = downstream->attach_downstream_connection(
-        handler_->get_downstream_connection(downstream));
+    dconn = handler_->get_downstream_connection(downstream);
+    if (!dconn) {
+      goto fail;
+    }
+
+    rv = downstream->attach_downstream_connection(std::move(dconn));
     if (rv != 0) {
       goto fail;
     }
@@ -1841,9 +1849,7 @@ int Http2Upstream::prepare_push_promise(Downstream *downstream) {
     if (kv.token != http2::HD_LINK) {
       continue;
     }
-    for (auto &link :
-         http2::parse_link_header(kv.value.c_str(), kv.value.size())) {
-
+    for (auto &link : http2::parse_link_header(kv.value)) {
       StringRef scheme, authority, path;
 
       rv = http2::construct_push_component(balloc, scheme, authority, path,
@@ -1921,7 +1927,8 @@ int Http2Upstream::submit_push_promise(const StringRef &scheme,
   if (LOG_ENABLED(INFO)) {
     std::stringstream ss;
     for (auto &nv : nva) {
-      ss << TTY_HTTP_HD << nv.name << TTY_RST << ": " << nv.value << "\n";
+      ss << TTY_HTTP_HD << StringRef{nv.name, nv.namelen} << TTY_RST << ": "
+         << StringRef{nv.value, nv.valuelen} << "\n";
     }
     ULOG(INFO, this) << "HTTP push request headers. promised_stream_id="
                      << promised_stream_id << "\n" << ss.str();

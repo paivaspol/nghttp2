@@ -574,11 +574,6 @@ int parse_http_status_code(const StringRef &src) {
   return status;
 }
 
-int lookup_token(const std::string &name) {
-  return lookup_token(reinterpret_cast<const uint8_t *>(name.c_str()),
-                      name.size());
-}
-
 int lookup_token(const StringRef &name) {
   return lookup_token(name.byte(), name.size());
 }
@@ -1176,12 +1171,10 @@ almost_done:
 }
 } // namespace
 
-std::vector<LinkHeader> parse_link_header(const char *src, size_t len) {
-  auto first = src;
-  auto last = src + len;
+std::vector<LinkHeader> parse_link_header(const StringRef &src) {
   std::vector<LinkHeader> res;
-  for (; first != last;) {
-    auto rv = parse_next_link_header_once(first, last);
+  for (auto first = std::begin(src); first != std::end(src);) {
+    auto rv = parse_next_link_header_once(first, std::end(src));
     first = rv.second;
     auto &link = rv.first;
     if (!link.uri.empty()) {
@@ -1208,11 +1201,6 @@ bool expect_response_body(const std::string &method, int status_code) {
 
 bool expect_response_body(int method_token, int status_code) {
   return method_token != HTTP_HEAD && expect_response_body(status_code);
-}
-
-int lookup_method_token(const std::string &name) {
-  return lookup_method_token(reinterpret_cast<const uint8_t *>(name.c_str()),
-                             name.size());
 }
 
 int lookup_method_token(const StringRef &name) {

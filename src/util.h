@@ -192,12 +192,8 @@ bool starts_with(InputIterator1 first1, InputIterator1 last1,
   return std::equal(first2, last2, first1);
 }
 
-inline bool starts_with(const std::string &a, const std::string &b) {
-  return starts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
-}
-
-inline bool starts_with(const StringRef &a, const StringRef &b) {
-  return starts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename S, typename T> bool starts_with(const S &a, const T &b) {
+  return starts_with(a.begin(), a.end(), b.begin(), b.end());
 }
 
 struct CaseCmp {
@@ -215,22 +211,13 @@ bool istarts_with(InputIterator1 first1, InputIterator1 last1,
   return std::equal(first2, last2, first1, CaseCmp());
 }
 
-inline bool istarts_with(const std::string &a, const std::string &b) {
-  return istarts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename S, typename T> bool istarts_with(const S &a, const T &b) {
+  return istarts_with(a.begin(), a.end(), b.begin(), b.end());
 }
 
-inline bool istarts_with(const StringRef &a, const StringRef &b) {
-  return istarts_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
-}
-
-template <typename CharT, size_t N>
-bool istarts_with_l(const std::string &a, const CharT(&b)[N]) {
-  return istarts_with(std::begin(a), std::end(a), b, b + N - 1);
-}
-
-template <typename CharT, size_t N>
-bool istarts_with_l(const StringRef &a, const CharT(&b)[N]) {
-  return istarts_with(std::begin(a), std::end(a), b, b + N - 1);
+template <typename T, typename CharT, size_t N>
+bool istarts_with_l(const T &a, const CharT(&b)[N]) {
+  return istarts_with(a.begin(), a.end(), b, b + N - 1);
 }
 
 template <typename InputIterator1, typename InputIterator2>
@@ -242,13 +229,13 @@ bool ends_with(InputIterator1 first1, InputIterator1 last1,
   return std::equal(first2, last2, last1 - (last2 - first2));
 }
 
-inline bool ends_with(const std::string &a, const std::string &b) {
-  return ends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename T, typename S> bool ends_with(const T &a, const S &b) {
+  return ends_with(a.begin(), a.end(), b.begin(), b.end());
 }
 
-template <typename CharT, size_t N>
-bool ends_with_l(const StringRef &a, const CharT(&b)[N]) {
-  return ends_with(std::begin(a), std::end(a), b, b + N - 1);
+template <typename T, typename CharT, size_t N>
+bool ends_with_l(const T &a, const CharT(&b)[N]) {
+  return ends_with(a.begin(), a.end(), b, b + N - 1);
 }
 
 template <typename InputIterator1, typename InputIterator2>
@@ -260,22 +247,13 @@ bool iends_with(InputIterator1 first1, InputIterator1 last1,
   return std::equal(first2, last2, last1 - (last2 - first2), CaseCmp());
 }
 
-inline bool iends_with(const std::string &a, const std::string &b) {
-  return iends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename T, typename S> bool iends_with(const T &a, const S &b) {
+  return iends_with(a.begin(), a.end(), b.begin(), b.end());
 }
 
-inline bool iends_with(const StringRef &a, const StringRef &b) {
-  return iends_with(std::begin(a), std::end(a), std::begin(b), std::end(b));
-}
-
-template <typename CharT, size_t N>
-bool iends_with_l(const std::string &a, const CharT(&b)[N]) {
-  return iends_with(std::begin(a), std::end(a), b, b + N - 1);
-}
-
-template <typename CharT, size_t N>
-bool iends_with_l(const StringRef &a, const CharT(&b)[N]) {
-  return iends_with(std::begin(a), std::end(a), b, b + N - 1);
+template <typename T, typename CharT, size_t N>
+bool iends_with_l(const T &a, const CharT(&b)[N]) {
+  return iends_with(a.begin(), a.end(), b, b + N - 1);
 }
 
 template <typename InputIt1, typename InputIt2>
@@ -287,12 +265,8 @@ bool strieq(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
   return std::equal(first1, last1, first2, CaseCmp());
 }
 
-inline bool strieq(const std::string &a, const std::string &b) {
-  return strieq(std::begin(a), std::end(a), std::begin(b), std::end(b));
-}
-
-inline bool strieq(const StringRef &a, const StringRef &b) {
-  return strieq(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename T, typename S> bool strieq(const T &a, const S &b) {
+  return strieq(a.begin(), a.end(), b.begin(), b.end());
 }
 
 template <typename CharT, typename InputIt, size_t N>
@@ -300,14 +274,9 @@ bool strieq_l(const CharT(&a)[N], InputIt b, size_t blen) {
   return strieq(a, a + (N - 1), b, b + blen);
 }
 
-template <typename CharT, size_t N>
-bool strieq_l(const CharT(&a)[N], const std::string &b) {
-  return strieq(a, a + (N - 1), std::begin(b), std::end(b));
-}
-
-template <typename CharT, size_t N>
-bool strieq_l(const CharT(&a)[N], const StringRef &b) {
-  return strieq(a, a + (N - 1), std::begin(b), std::end(b));
+template <typename CharT, size_t N, typename T>
+bool strieq_l(const CharT(&a)[N], const T &b) {
+  return strieq(a, a + (N - 1), b.begin(), b.end());
 }
 
 template <typename InputIt1, typename InputIt2>
@@ -318,8 +287,8 @@ bool streq(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
   return std::equal(first1, last1, first2);
 }
 
-inline bool streq(const StringRef &a, const StringRef &b) {
-  return streq(std::begin(a), std::end(a), std::begin(b), std::end(b));
+template <typename T, typename S> bool streq(const T &a, const S &b) {
+  return streq(a.begin(), a.end(), b.begin(), b.end());
 }
 
 template <typename CharT, typename InputIt, size_t N>
@@ -327,19 +296,17 @@ bool streq_l(const CharT(&a)[N], InputIt b, size_t blen) {
   return streq(a, a + (N - 1), b, b + blen);
 }
 
-template <typename CharT, size_t N>
-bool streq_l(const CharT(&a)[N], const std::string &b) {
-  return streq(a, a + (N - 1), std::begin(b), std::end(b));
-}
-
-template <typename CharT, size_t N>
-bool streq_l(const CharT(&a)[N], const StringRef &b) {
-  return streq(a, a + (N - 1), std::begin(b), std::end(b));
+template <typename CharT, size_t N, typename T>
+bool streq_l(const CharT(&a)[N], const T &b) {
+  return streq(a, a + (N - 1), b.begin(), b.end());
 }
 
 // Returns true if |a| contains |b|.  If both |a| and |b| are empty,
 // this function returns false.
-bool strifind(const StringRef &a, const StringRef &b);
+template <typename S, typename T> bool strifind(const S &a, const T &b) {
+  return std::search(a.begin(), a.end(), b.begin(), b.end(), CaseCmp()) !=
+         a.end();
+}
 
 template <typename InputIt> void inp_strlower(InputIt first, InputIt last) {
   std::transform(first, last, first, lowcase);

@@ -647,6 +647,14 @@ nghttpx - proxy
 HTTP/1.1, and powers http://nghttp2.org and supports HTTP/2 server
 push.
 
+We reworked ``nghttpx`` command-line interface, and as a result, there
+are several incompatibles from 1.8.0 or earlier.  This is necessary to
+extend its capability, and secure the further feature enhancements in
+the future release.  Please read `Migration from nghttpx v1.8.0 or
+earlier
+<https://nghttp2.org/documentation/nghttpx-howto.html#migration-from-nghttpx-v1-8-0-or-earlier>`_
+to know how to migrate from earlier releases.
+
 ``nghttpx`` implements `important performance-oriented features
 <https://istlsfastyet.com/#server-performance>`_ in TLS, such as
 session IDs, session tickets (with automatic key rotation), OCSP
@@ -657,24 +665,24 @@ memcached.
 
 ``nghttpx`` has 2 operation modes:
 
-================== ====================== =================== =============
-Mode option        Frontend               Backend             Note
-================== ====================== =================== =============
-default mode       HTTP/2, SPDY, HTTP/1.1 HTTP/1.1, HTTP/2    Reverse proxy
-``--http2-proxy``  HTTP/2, SPDY, HTTP/1.1 HTTP/1.1, or HTTP/2 Forward proxy
-================== ====================== =================== =============
+================== ====================== ================ =============
+Mode option        Frontend               Backend          Note
+================== ====================== ================ =============
+default mode       HTTP/2, SPDY, HTTP/1.1 HTTP/1.1, HTTP/2 Reverse proxy
+``--http2-proxy``  HTTP/2, SPDY, HTTP/1.1 HTTP/1.1, HTTP/2 Forward proxy
+================== ====================== ================ =============
 
 The interesting mode at the moment is the default mode.  It works like
 a reverse proxy and listens for HTTP/2, SPDY and HTTP/1.1 and can be
 deployed as a SSL/TLS terminator for existing web server.
 
 In all modes, the frontend connections are encrypted by SSL/TLS by
-default.  To disable encryption, use the ``--frontend-no-tls`` option.
-If encryption is disabled, SPDY is disabled in the frontend and
-incoming HTTP/1.1 connections can be upgraded to HTTP/2 through HTTP
-Upgrade.  On the other hard, backend connections are not encrypted by
-default.  To encrypt backend connections, use ``--backend-tls``
-option.
+default.  To disable encryption, use the ``no-tls`` keyword in
+``--frontend`` option.  If encryption is disabled, SPDY is disabled in
+the frontend and incoming HTTP/1.1 connections can be upgraded to
+HTTP/2 through HTTP Upgrade.  On the other hard, backend connections
+are not encrypted by default.  To encrypt backend connections, use
+``tls`` keyword in ``--backend`` option.
 
 ``nghttpx`` supports a configuration file.  See the ``--conf`` option and
 sample configuration file ``nghttpx.conf.sample``.

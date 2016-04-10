@@ -1203,7 +1203,7 @@ Options:
   The options are categorized into several groups.
 
 Connections:
-  -b, --backend=(<HOST>,<PORT>|unix:<PATH>)[;[<PATTERN>[:...]][;proto=<PROTO>][;tls]]
+  -b, --backend=(<HOST>,<PORT>|unix:<PATH>)[;[<PATTERN>[:...]][;proto=<PROTO>][;tls][;fall=<N>][;rise=<N>]]
               Set  backend  host  and   port.   The  multiple  backend
               addresses are  accepted by repeating this  option.  UNIX
               domain socket  can be  specified by prefixing  path name
@@ -1276,6 +1276,23 @@ Connections:
 
               Optionally,  TLS  can  be enabled  by  specifying  "tls"
               keyword.  TLS is not enabled by default.
+
+              Optionally,  the feature  to detect  whether backend  is
+              online/offline can  be enabled  using "fall"  and "rise"
+              parameters.   Using  "fall=<N>"  parameter,  if  nghttpx
+              cannot connect  to a  this backend <N>  times in  a row,
+              this  backend  is  assumed  to be  offline,  and  it  is
+              excluded from load balancing.  If <N> is 0, this backend
+              never  be excluded  from load  balancing whatever  times
+              nghttpx cannot connect  to it, and this  is the default.
+              There is  also "rise=<N>" parameter.  After  backend was
+              excluded from load balancing group, nghttpx periodically
+              attempts to make a connection to the failed backend, and
+              if the  connection is made  successfully <N> times  in a
+              row, the backend is assumed to  be online, and it is now
+              eligible  for load  balancing target.   If <N>  is 0,  a
+              backend  is permanently  offline, once  it goes  in that
+              state, and this is the default behaviour.
 
               Since ";" and ":" are  used as delimiter, <PATTERN> must
               not  contain these  characters.  Since  ";" has  special
@@ -2093,6 +2110,8 @@ void process_options(int argc, char **argv,
     // non-catch-all patterns to catch-all pattern.
     DownstreamAddrGroupConfig catch_all(StringRef::from_lit("/"));
     auto proto = PROTO_NONE;
+    auto tls = false;
+    auto tls_seen = false;
     for (auto &g : addr_groups) {
       if (proto == PROTO_NONE) {
         proto = g.proto;
@@ -2102,10 +2121,22 @@ void process_options(int argc, char **argv,
                                            "be the same for all backends.";
         exit(EXIT_FAILURE);
       }
+
+      if (!tls_seen) {
+        tls = g.tls;
+        tls_seen = true;
+      } else if (tls != g.tls) {
+        LOG(ERROR) << SHRPX_OPT_BACKEND
+                   << ": <PATTERN> was ignored with --http2-proxy, and tls "
+                      "must be enabled or disabled for all backends.";
+        exit(EXIT_FAILURE);
+      }
+
       std::move(std::begin(g.addrs), std::end(g.addrs),
                 std::back_inserter(catch_all.addrs));
     }
     catch_all.proto = proto;
+    catch_all.tls = tls;
     std::vector<DownstreamAddrGroupConfig>().swap(addr_groups);
     std::vector<WildcardPattern>().swap(mod_config()->wildcard_patterns);
     // maybe not necessary?

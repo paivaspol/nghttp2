@@ -348,11 +348,6 @@ time_t parse_http_date(const StringRef &s) {
   return nghttp2_timegm_without_yday(&tm);
 }
 
-bool strifind(const StringRef &a, const StringRef &b) {
-  return std::search(std::begin(a), std::end(a), std::begin(b), std::end(b),
-                     CaseCmp()) != std::end(a);
-}
-
 char upcase(char c) {
   if ('a' <= c && c <= 'z') {
     return c - 'a' + 'A';
@@ -740,7 +735,7 @@ bool check_path(const std::string &path) {
          path.find('\\') == std::string::npos &&
          path.find("/../") == std::string::npos &&
          path.find("/./") == std::string::npos &&
-         !util::ends_with(path, "/..") && !util::ends_with(path, "/.");
+         !util::ends_with_l(path, "/..") && !util::ends_with_l(path, "/.");
 }
 
 int64_t to_time64(const timeval &tv) {

@@ -97,9 +97,6 @@ int Http2DownstreamConnection::attach_downstream(Downstream *downstream) {
   http2session_->add_downstream_connection(this);
   if (http2session_->get_state() == Http2Session::DISCONNECTED) {
     http2session_->signal_write();
-    if (http2session_->get_state() == Http2Session::DISCONNECTED) {
-      return -1;
-    }
   }
 
   downstream_ = downstream;
@@ -108,7 +105,9 @@ int Http2DownstreamConnection::attach_downstream(Downstream *downstream) {
   auto &req = downstream_->request();
 
   // HTTP/2 disables HTTP Upgrade.
-  req.upgrade_request = false;
+  if (req.method != HTTP_CONNECT) {
+    req.upgrade_request = false;
+  }
 
   return 0;
 }
@@ -173,7 +172,7 @@ ssize_t http2_data_read_callback(nghttp2_session *session, int32_t stream_id,
   if (!sd || !sd->dconn) {
     return NGHTTP2_ERR_DEFERRED;
   }
-  auto dconn = static_cast<Http2DownstreamConnection *>(source->ptr);
+  auto dconn = sd->dconn;
   auto downstream = dconn->get_downstream();
   if (!downstream) {
     // In this case, RST_STREAM should have been issued. But depending
@@ -442,7 +441,8 @@ int Http2DownstreamConnection::push_request_headers() {
   if (LOG_ENABLED(INFO)) {
     std::stringstream ss;
     for (auto &nv : nva) {
-      ss << TTY_HTTP_HD << nv.name << TTY_RST << ": " << nv.value << "\n";
+      ss << TTY_HTTP_HD << StringRef{nv.name, nv.namelen} << TTY_RST << ": "
+         << StringRef{nv.value, nv.valuelen} << "\n";
     }
     DCLOG(INFO, this) << "HTTP request headers\n" << ss.str();
   }
@@ -453,9 +453,7 @@ int Http2DownstreamConnection::push_request_headers() {
   if (req.method == HTTP_CONNECT || chunked_encoding || content_length ||
       req.http2_expect_body) {
     // Request-body is expected.
-    nghttp2_data_provider data_prd;
-    data_prd.source.ptr = this;
-    data_prd.read_callback = http2_data_read_callback;
+    nghttp2_data_provider data_prd{{}, http2_data_read_callback};
     rv = http2session_->submit_request(this, nva.data(), nva.size(), &data_prd);
   } else {
     rv = http2session_->submit_request(this, nva.data(), nva.size(), nullptr);

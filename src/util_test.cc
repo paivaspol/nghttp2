@@ -91,11 +91,11 @@ void test_util_strieq(void) {
   CU_ASSERT(!util::strieq_l("alpha", "AlPhA ", 6));
   CU_ASSERT(!util::strieq_l("", "AlPhA ", 6));
 
-  CU_ASSERT(util::strieq_l("alpha", "alpha"));
-  CU_ASSERT(util::strieq_l("alpha", "AlPhA"));
-  CU_ASSERT(util::strieq_l("", ""));
-  CU_ASSERT(!util::strieq_l("alpha", "AlPhA "));
-  CU_ASSERT(!util::strieq_l("", "AlPhA "));
+  CU_ASSERT(util::strieq_l("alpha", StringRef::from_lit("alpha")));
+  CU_ASSERT(util::strieq_l("alpha", StringRef::from_lit("AlPhA")));
+  CU_ASSERT(util::strieq_l("", StringRef{}));
+  CU_ASSERT(!util::strieq_l("alpha", StringRef::from_lit("AlPhA ")));
+  CU_ASSERT(!util::strieq_l("", StringRef::from_lit("AlPhA ")));
 }
 
 void test_util_inp_strlower(void) {
@@ -379,33 +379,45 @@ void test_util_format_duration(void) {
 }
 
 void test_util_starts_with(void) {
-  CU_ASSERT(util::starts_with("foo", "foo"));
-  CU_ASSERT(util::starts_with("fooo", "foo"));
-  CU_ASSERT(util::starts_with("ofoo", ""));
-  CU_ASSERT(!util::starts_with("ofoo", "foo"));
+  CU_ASSERT(util::starts_with(StringRef::from_lit("foo"),
+                              StringRef::from_lit("foo")));
+  CU_ASSERT(util::starts_with(StringRef::from_lit("fooo"),
+                              StringRef::from_lit("foo")));
+  CU_ASSERT(util::starts_with(StringRef::from_lit("ofoo"), StringRef{}));
+  CU_ASSERT(!util::starts_with(StringRef::from_lit("ofoo"),
+                               StringRef::from_lit("foo")));
 
-  CU_ASSERT(util::istarts_with("FOO", "fOO"));
-  CU_ASSERT(util::starts_with("ofoo", ""));
-  CU_ASSERT(util::istarts_with("fOOo", "Foo"));
-  CU_ASSERT(!util::istarts_with("ofoo", "foo"));
+  CU_ASSERT(util::istarts_with(StringRef::from_lit("FOO"),
+                               StringRef::from_lit("fOO")));
+  CU_ASSERT(util::istarts_with(StringRef::from_lit("ofoo"), StringRef{}));
+  CU_ASSERT(util::istarts_with(StringRef::from_lit("fOOo"),
+                               StringRef::from_lit("Foo")));
+  CU_ASSERT(!util::istarts_with(StringRef::from_lit("ofoo"),
+                                StringRef::from_lit("foo")));
 
-  CU_ASSERT(util::istarts_with_l("fOOo", "Foo"));
-  CU_ASSERT(!util::istarts_with_l("ofoo", "foo"));
+  CU_ASSERT(util::istarts_with_l(StringRef::from_lit("fOOo"), "Foo"));
+  CU_ASSERT(!util::istarts_with_l(StringRef::from_lit("ofoo"), "foo"));
 }
 
 void test_util_ends_with(void) {
-  CU_ASSERT(util::ends_with("foo", "foo"));
-  CU_ASSERT(util::ends_with("foo", ""));
-  CU_ASSERT(util::ends_with("ofoo", "foo"));
-  CU_ASSERT(!util::ends_with("ofoo", "fo"));
+  CU_ASSERT(
+      util::ends_with(StringRef::from_lit("foo"), StringRef::from_lit("foo")));
+  CU_ASSERT(util::ends_with(StringRef::from_lit("foo"), StringRef{}));
+  CU_ASSERT(
+      util::ends_with(StringRef::from_lit("ofoo"), StringRef::from_lit("foo")));
+  CU_ASSERT(
+      !util::ends_with(StringRef::from_lit("ofoo"), StringRef::from_lit("fo")));
 
-  CU_ASSERT(util::iends_with("fOo", "Foo"));
-  CU_ASSERT(util::iends_with("foo", ""));
-  CU_ASSERT(util::iends_with("oFoo", "fOO"));
-  CU_ASSERT(!util::iends_with("ofoo", "fo"));
+  CU_ASSERT(
+      util::iends_with(StringRef::from_lit("fOo"), StringRef::from_lit("Foo")));
+  CU_ASSERT(util::iends_with(StringRef::from_lit("foo"), StringRef{}));
+  CU_ASSERT(util::iends_with(StringRef::from_lit("oFoo"),
+                             StringRef::from_lit("fOO")));
+  CU_ASSERT(!util::iends_with(StringRef::from_lit("ofoo"),
+                              StringRef::from_lit("fo")));
 
-  CU_ASSERT(util::iends_with_l("oFoo", "fOO"));
-  CU_ASSERT(!util::iends_with_l("ofoo", "fo"));
+  CU_ASSERT(util::iends_with_l(StringRef::from_lit("oFoo"), "fOO"));
+  CU_ASSERT(!util::iends_with_l(StringRef::from_lit("ofoo"), "fo"));
 }
 
 void test_util_parse_http_date(void) {
