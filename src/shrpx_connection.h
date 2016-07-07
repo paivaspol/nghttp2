@@ -125,9 +125,6 @@ struct Connection {
   ev_timer rt;
   RateLimit wlimit;
   RateLimit rlimit;
-  IOCb writecb;
-  IOCb readcb;
-  TimerCb timeoutcb;
   struct ev_loop *loop;
   void *data;
   int fd;
@@ -138,6 +135,15 @@ struct Connection {
   // use this value when it is useful.
   shrpx_proto proto;
 };
+
+// Creates BIO_method shared by all SSL objects.  If nghttp2 is built
+// with OpenSSL < 1.1.0, this returns statically allocated object.
+// Otherwise, it returns new BIO_METHOD object every time.
+BIO_METHOD *create_bio_method();
+
+// Deletes given |bio_method|.  If nghttp2 is built with OpenSSL <
+// 1.1.0, this function is noop.
+void delete_bio_method(BIO_METHOD *bio_method);
 
 } // namespace shrpx
 

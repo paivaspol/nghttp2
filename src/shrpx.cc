@@ -85,6 +85,7 @@
 #include "shrpx_worker_process.h"
 #include "shrpx_process.h"
 #include "shrpx_signal.h"
+#include "shrpx_connection.h"
 #include "util.h"
 #include "app_helper.h"
 #include "ssl.h"
@@ -151,52 +152,6 @@ struct SignalServer {
 };
 
 namespace {
-int resolve_hostname(Address *addr, const char *hostname, uint16_t port,
-                     int family) {
-  int rv;
-
-  auto service = util::utos(port);
-
-  addrinfo hints{};
-  hints.ai_family = family;
-  hints.ai_socktype = SOCK_STREAM;
-#ifdef AI_ADDRCONFIG
-  hints.ai_flags |= AI_ADDRCONFIG;
-#endif // AI_ADDRCONFIG
-  addrinfo *res;
-
-  rv = getaddrinfo(hostname, service.c_str(), &hints, &res);
-  if (rv != 0) {
-    LOG(FATAL) << "Unable to resolve address for " << hostname << ": "
-               << gai_strerror(rv);
-    return -1;
-  }
-
-  auto res_d = defer(freeaddrinfo, res);
-
-  char host[NI_MAXHOST];
-  rv = getnameinfo(res->ai_addr, res->ai_addrlen, host, sizeof(host), nullptr,
-                   0, NI_NUMERICHOST);
-  if (rv != 0) {
-    LOG(FATAL) << "Address resolution for " << hostname
-               << " failed: " << gai_strerror(rv);
-
-    return -1;
-  }
-
-  if (LOG_ENABLED(INFO)) {
-    LOG(INFO) << "Address resolution for " << hostname
-              << " succeeded: " << host;
-  }
-
-  memcpy(&addr->su, res->ai_addr, res->ai_addrlen);
-  addr->len = res->ai_addrlen;
-
-  return 0;
-}
-} // namespace
-
-namespace {
 int chown_to_running_user(const char *path) {
   return chown(path, get_config()->uid, get_config()->gid);
 }
@@ -204,18 +159,59 @@ int chown_to_running_user(const char *path) {
 
 namespace {
 void save_pid() {
-  std::ofstream out(get_config()->pid_file.c_str(), std::ios::binary);
-  out << get_config()->pid << "\n";
-  out.close();
-  if (!out) {
-    LOG(ERROR) << "Could not save PID to file " << get_config()->pid_file;
+  constexpr auto SUFFIX = StringRef::from_lit(".XXXXXX");
+  auto &pid_file = get_config()->pid_file;
+
+  auto len = get_config()->pid_file.size() + SUFFIX.size();
+  auto buf = make_unique<char[]>(len + 1);
+  auto p = buf.get();
+
+  p = std::copy(std::begin(pid_file), std::end(pid_file), p);
+  p = std::copy(std::begin(SUFFIX), std::end(SUFFIX), p);
+  *p = '\0';
+
+  auto temp_path = buf.get();
+
+  auto fd = mkstemp(temp_path);
+  if (fd == -1) {
+    auto error = errno;
+    LOG(ERROR) << "Could not save PID to file " << pid_file << ": "
+               << strerror(error);
+    exit(EXIT_FAILURE);
+  }
+
+  auto content = util::utos(get_config()->pid) + '\n';
+
+  if (write(fd, content.c_str(), content.size()) == -1) {
+    auto error = errno;
+    LOG(ERROR) << "Could not save PID to file " << pid_file << ": "
+               << strerror(error);
+    exit(EXIT_FAILURE);
+  }
+
+  if (fsync(fd) == -1) {
+    auto error = errno;
+    LOG(ERROR) << "Could not save PID to file " << pid_file << ": "
+               << strerror(error);
+    exit(EXIT_FAILURE);
+  }
+
+  close(fd);
+
+  if (rename(temp_path, pid_file.c_str()) == -1) {
+    auto error = errno;
+    LOG(ERROR) << "Could not save PID to file " << pid_file << ": "
+               << strerror(error);
+
+    unlink(temp_path);
+
     exit(EXIT_FAILURE);
   }
 
   if (get_config()->uid != 0) {
-    if (chown_to_running_user(get_config()->pid_file.c_str()) == -1) {
+    if (chown_to_running_user(pid_file.c_str()) == -1) {
       auto error = errno;
-      LOG(WARN) << "Changing owner of pid file " << get_config()->pid_file
+      LOG(WARN) << "Changing owner of pid file " << pid_file
                 << " failed: " << strerror(error);
     }
   }
@@ -950,10 +946,6 @@ int event_loop() {
     redirect_stderr_to_errorlog();
   }
 
-  if (!get_config()->pid_file.empty()) {
-    save_pid();
-  }
-
   SignalServer ssv;
 
   rv = pipe(ssv.ipc_fd.data());
@@ -974,7 +966,7 @@ int event_loop() {
     return -1;
   }
 
-  auto loop = EV_DEFAULT;
+  auto loop = ev_default_loop(get_config()->ev_loop_flags);
 
   auto pid = fork_worker_process(&ssv);
 
@@ -999,6 +991,14 @@ int event_loop() {
   ev_child_init(&worker_process_childev, worker_process_child_cb, pid, 0);
   worker_process_childev.data = nullptr;
   ev_child_start(loop, &worker_process_childev);
+
+  // Write PID file when we are ready to accept connection from peer.
+  // This makes easier to write restart script for nghttpx.  Because
+  // when we know that PID file is recreated, it means we can send
+  // QUIT signal to the old process to make it shutdown gracefully.
+  if (!get_config()->pid_file.empty()) {
+    save_pid();
+  }
 
   ev_run(loop, 0);
 
@@ -1035,17 +1035,16 @@ constexpr auto DEFAULT_ACCESSLOG_FORMAT = StringRef::from_lit(
 } // namespace
 
 namespace {
-constexpr char DEFAULT_DOWNSTREAM_HOST[] = "127.0.0.1";
-constexpr int16_t DEFAULT_DOWNSTREAM_PORT = 80;
-} // namespace;
-
-namespace {
 void fill_default_config() {
   *mod_config() = {};
 
   mod_config()->num_worker = 1;
   mod_config()->conf_path = "/etc/nghttpx/nghttpx.conf";
   mod_config()->pid = getpid();
+
+  if (ev_supported_backends() & ~ev_recommended_backends() & EVBACKEND_KQUEUE) {
+    mod_config()->ev_loop_flags = ev_recommended_backends() | EVBACKEND_KQUEUE;
+  }
 
   auto &tlsconf = mod_config()->tls;
   {
@@ -1094,6 +1093,12 @@ void fill_default_config() {
   auto &http2conf = mod_config()->http2;
   {
     auto &upstreamconf = http2conf.upstream;
+
+    {
+      auto &timeoutconf = upstreamconf.timeout;
+      timeoutconf.settings = 10_s;
+    }
+
     // window bits for HTTP/2 and SPDY upstream connection per
     // stream. 2**16-1 = 64KiB-1, which is HTTP/2 default. Please note
     // that SPDY/3 default is 64KiB.
@@ -1106,10 +1111,21 @@ void fill_default_config() {
     nghttp2_option_new(&upstreamconf.option);
     nghttp2_option_set_no_auto_window_update(upstreamconf.option, 1);
     nghttp2_option_set_no_recv_client_magic(upstreamconf.option, 1);
+
+    // For API endpoint, we enable automatic window update.  This is
+    // because we are a sink.
+    nghttp2_option_new(&upstreamconf.alt_mode_option);
+    nghttp2_option_set_no_recv_client_magic(upstreamconf.alt_mode_option, 1);
   }
 
   {
     auto &downstreamconf = http2conf.downstream;
+
+    {
+      auto &timeoutconf = downstreamconf.timeout;
+      timeoutconf.settings = 10_s;
+    }
+
     downstreamconf.window_bits = 16;
     downstreamconf.connection_window_bits = 30;
     downstreamconf.max_concurrent_streams = 100;
@@ -1156,7 +1172,8 @@ void fill_default_config() {
   }
 
   {
-    auto &downstreamconf = connconf.downstream;
+    connconf.downstream = std::make_shared<DownstreamConfig>();
+    auto &downstreamconf = *connconf.downstream;
     {
       auto &timeoutconf = downstreamconf.timeout;
       // Read/Write timeouts for downstream connection
@@ -1164,6 +1181,7 @@ void fill_default_config() {
       timeoutconf.write = 30_s;
       // Timeout for pooled (idle) connections
       timeoutconf.idle_read = 2_s;
+      timeoutconf.max_backoff = 120_s;
     }
 
     downstreamconf.connections_per_host = 8;
@@ -1171,6 +1189,9 @@ void fill_default_config() {
     downstreamconf.response_buffer_size = 128_k;
     downstreamconf.family = AF_UNSPEC;
   }
+
+  auto &apiconf = mod_config()->api;
+  apiconf.max_request_body = 16_k;
 }
 
 } // namespace
@@ -1194,16 +1215,17 @@ void print_help(std::ostream &out) {
   out << R"(
   <PRIVATE_KEY>
               Set  path  to  server's private  key.   Required  unless
-              "no-tls" keyword is used in --frontend option.
+              "no-tls" parameter is used in --frontend option.
   <CERT>      Set  path  to  server's  certificate.   Required  unless
-              "no-tls" keyword is used  in --frontend option.  To make
-              OCSP stapling work, this must be an absolute path.
+              "no-tls"  parameter is  used in  --frontend option.   To
+              make OCSP stapling work, this must be an absolute path.
 
 Options:
   The options are categorized into several groups.
 
 Connections:
-  -b, --backend=(<HOST>,<PORT>|unix:<PATH>)[;[<PATTERN>[:...]][;proto=<PROTO>][;tls][;fall=<N>][;rise=<N>]]
+  -b, --backend=(<HOST>,<PORT>|unix:<PATH>)[;[<PATTERN>[:...]][[;PARAM]...]
+
               Set  backend  host  and   port.   The  multiple  backend
               addresses are  accepted by repeating this  option.  UNIX
               domain socket  can be  specified by prefixing  path name
@@ -1265,20 +1287,35 @@ Connections:
               The backend addresses sharing same <PATTERN> are grouped
               together forming  load balancing  group.
 
-              Optionally,   backend   application  protocol   can   be
-              specified in <PROTO>.  All that share the same <PATTERN>
-              must  have  the  same  <PROTO> value  if  it  is  given.
-              <PROTO>  should be  one  of the  following list  without
-              quotes: "h2", "http/1.1".  The  default value of <PROTO>
-              is "http/1.1".  Note that  usually "h2" refers to HTTP/2
-              over TLS.  But  in this option, it may  mean HTTP/2 over
-              cleartext TCP unless "tls" keyword is used (see below).
+              Several parameters <PARAM> are accepted after <PATTERN>.
+              The  parameters are  delimited  by  ";".  The  available
+              parameters       are:      "proto=<PROTO>",       "tls",
+              "sni=<SNI_HOST>",     "fall=<N>",    "rise=<N>",     and
+              "affinity=<METHOD>".  The parameter consists of keyword,
+              and optionally followed by  "=" and value.  For example,
+              the parameter "proto=h2" consists of the keyword "proto"
+              and  value "h2".   The parameter  "tls" consists  of the
+              keyword   "tls"  without   value.   Each   parameter  is
+              described as follows.
 
-              Optionally,  TLS  can  be enabled  by  specifying  "tls"
-              keyword.  TLS is not enabled by default.
+              The backend application protocol  can be specified using
+              optional  "proto"   parameter,  and   in  the   form  of
+              "proto=<PROTO>".  <PROTO> should be one of the following
+              list  without  quotes:  "h2", "http/1.1".   The  default
+              value of <PROTO> is  "http/1.1".  Note that usually "h2"
+              refers to HTTP/2  over TLS.  But in this  option, it may
+              mean HTTP/2  over cleartext TCP unless  "tls" keyword is
+              used (see below).
 
-              Optionally,  the feature  to detect  whether backend  is
-              online/offline can  be enabled  using "fall"  and "rise"
+              TLS  can   be  enabled  by  specifying   optional  "tls"
+              parameter.  TLS is not enabled by default.
+
+              With "sni=<SNI_HOST>" parameter, it can override the TLS
+              SNI  field  value  with  given  <SNI_HOST>.   This  will
+              default to the backend <HOST> name
+
+              The  feature  to detect  whether  backend  is online  or
+              offline can be enabled  using optional "fall" and "rise"
               parameters.   Using  "fall=<N>"  parameter,  if  nghttpx
               cannot connect  to a  this backend <N>  times in  a row,
               this  backend  is  assumed  to be  offline,  and  it  is
@@ -1294,13 +1331,27 @@ Connections:
               backend  is permanently  offline, once  it goes  in that
               state, and this is the default behaviour.
 
+              The     session     affinity    is     enabled     using
+              "affinity=<METHOD>"  parameter.   If  "ip" is  given  in
+              <METHOD>, client  IP based session affinity  is enabled.
+              If  "none" is  given  in <METHOD>,  session affinity  is
+              disabled, and this is the default.  The session affinity
+              is enabled per  <PATTERN>.  If at least  one backend has
+              "affinity" parameter,  and its  <METHOD> is  not "none",
+              session  affinity is  enabled  for  all backend  servers
+              sharing  the  same  <PATTERN>.   It is  advised  to  set
+              "affinity"  parameter  to   all  backend  explicitly  if
+              session affinity  is desired.  The session  affinity may
+              break if one of the backend gets unreachable, or backend
+              settings are reloaded or replaced by API.
+
               Since ";" and ":" are  used as delimiter, <PATTERN> must
               not  contain these  characters.  Since  ";" has  special
               meaning in shell, the option value must be quoted.
 
               Default: )" << DEFAULT_DOWNSTREAM_HOST << ","
       << DEFAULT_DOWNSTREAM_PORT << R"(
-  -f, --frontend=(<HOST>,<PORT>|unix:<PATH>)[;no-tls]
+  -f, --frontend=(<HOST>,<PORT>|unix:<PATH>)[[;PARAM]...]
               Set  frontend  host and  port.   If  <HOST> is  '*',  it
               assumes  all addresses  including  both  IPv4 and  IPv6.
               UNIX domain  socket can  be specified by  prefixing path
@@ -1308,8 +1359,24 @@ Connections:
               This  option can  be used  multiple times  to listen  to
               multiple addresses.
 
+              This option  can take  0 or  more parameters,  which are
+              described  below.   Note   that  "api"  and  "healthmon"
+              parameters are mutually exclusive.
+
               Optionally, TLS  can be disabled by  specifying "no-tls"
-              keyword.  TLS is enabled by default.
+              parameter.  TLS is enabled by default.
+
+              To  make this  frontend as  API endpoint,  specify "api"
+              parameter.   This   is  disabled  by  default.    It  is
+              important  to  limit the  access  to  the API  frontend.
+              Otherwise, someone  may change  the backend  server, and
+              break your services,  or expose confidential information
+              to the outside the world.
+
+              To  make  this  frontend  as  health  monitor  endpoint,
+              specify  "healthmon"  parameter.   This is  disabled  by
+              default.  Any  requests which come through  this address
+              are replied with 200 HTTP status, without no body.
 
               Default: *,3000
   --backlog=<N>
@@ -1397,7 +1464,7 @@ Performance:
               HTTP/2).   To  limit  the   number  of  connections  per
               frontend        for       default        mode,       use
               --backend-connections-per-frontend.
-              Default: )" << get_config()->conn.downstream.connections_per_host
+              Default: )" << get_config()->conn.downstream->connections_per_host
       << R"(
   --backend-connections-per-frontend=<N>
               Set  maximum number  of  backend concurrent  connections
@@ -1407,7 +1474,7 @@ Performance:
               with          --http2-proxy         option,          use
               --backend-connections-per-host.
               Default: )"
-      << get_config()->conn.downstream.connections_per_frontend << R"(
+      << get_config()->conn.downstream->connections_per_frontend << R"(
   --rlimit-nofile=<N>
               Set maximum number of open files (RLIMIT_NOFILE) to <N>.
               If 0 is given, nghttpx does not set the limit.
@@ -1415,12 +1482,12 @@ Performance:
   --backend-request-buffer=<SIZE>
               Set buffer size used to store backend request.
               Default: )"
-      << util::utos_unit(get_config()->conn.downstream.request_buffer_size)
+      << util::utos_unit(get_config()->conn.downstream->request_buffer_size)
       << R"(
   --backend-response-buffer=<SIZE>
               Set buffer size used to store backend response.
               Default: )"
-      << util::utos_unit(get_config()->conn.downstream.response_buffer_size)
+      << util::utos_unit(get_config()->conn.downstream->response_buffer_size)
       << R"(
   --fastopen=<N>
               Enables  "TCP Fast  Open" for  the listening  socket and
@@ -1428,6 +1495,10 @@ Performance:
               that have not yet completed the three-way handshake.  If
               value is 0 then fast open is disabled.
               Default: )" << get_config()->conn.listener.fastopen << R"(
+  --no-kqueue Don't use  kqueue.  This  option is only  applicable for
+              the platforms  which have kqueue.  For  other platforms,
+              this option will be simply ignored.
+
 Timeout:
   --frontend-http2-read-timeout=<DURATION>
               Specify  read  timeout  for  HTTP/2  and  SPDY  frontend
@@ -1456,15 +1527,15 @@ Timeout:
   --backend-read-timeout=<DURATION>
               Specify read timeout for backend connection.
               Default: )"
-      << util::duration_str(get_config()->conn.downstream.timeout.read) << R"(
+      << util::duration_str(get_config()->conn.downstream->timeout.read) << R"(
   --backend-write-timeout=<DURATION>
               Specify write timeout for backend connection.
               Default: )"
-      << util::duration_str(get_config()->conn.downstream.timeout.write) << R"(
+      << util::duration_str(get_config()->conn.downstream->timeout.write) << R"(
   --backend-keep-alive-timeout=<DURATION>
               Specify keep-alive timeout for backend connection.
               Default: )"
-      << util::duration_str(get_config()->conn.downstream.timeout.idle_read)
+      << util::duration_str(get_config()->conn.downstream->timeout.idle_read)
       << R"(
   --listener-disable-timeout=<DURATION>
               After accepting  connection failed,  connection listener
@@ -1472,6 +1543,30 @@ Timeout:
               disables this feature.
               Default: )"
       << util::duration_str(get_config()->conn.listener.timeout.sleep) << R"(
+  --frontend-http2-setting-timeout=<DURATION>
+              Specify  timeout before  SETTINGS ACK  is received  from
+              client.
+              Default: )"
+      << util::duration_str(get_config()->http2.upstream.timeout.settings)
+      << R"(
+  --backend-http2-settings-timeout=<DURATION>
+              Specify  timeout before  SETTINGS ACK  is received  from
+              backend server.
+              Default: )"
+      << util::duration_str(get_config()->http2.downstream.timeout.settings)
+      << R"(
+  --backend-max-backoff=<DURATION>
+              Specify  maximum backoff  interval.  This  is used  when
+              doing health  check against offline backend  (see "fail"
+              parameter  in --backend  option).   It is  also used  to
+              limit  the  maximum   interval  to  temporarily  disable
+              backend  when nghttpx  failed to  connect to  it.  These
+              intervals are calculated  using exponential backoff, and
+              consecutive failed attempts increase the interval.  This
+              option caps its maximum value.
+              Default: )"
+      << util::duration_str(get_config()->conn.downstream->timeout.max_backoff)
+      << R"(
 
 SSL/TLS:
   --ciphers=<SUITE>
@@ -1496,9 +1591,6 @@ SSL/TLS:
               indicated  by  client  using TLS  SNI  extension.   This
               option  can  be  used  multiple  times.   To  make  OCSP
               stapling work, <CERTPATH> must be absolute path.
-  --backend-tls-sni-field=<HOST>
-              Explicitly  set the  content of  the TLS  SNI extension.
-              This will default to the backend HOST name.
   --dh-param-file=<PATH>
               Path to file that contains  DH parameters in PEM format.
               Without  this   option,  DHE   cipher  suites   are  not
@@ -1568,7 +1660,7 @@ SSL/TLS:
               "TLS SESSION  TICKET RESUMPTION" section in  manual page
               to know the data format in memcached entry.  Optionally,
               memcached  connection  can  be  encrypted  with  TLS  by
-              specifying "tls" keyword.
+              specifying "tls" parameter.
   --tls-ticket-key-memcached-address-family=(auto|IPv4|IPv6)
               Specify address  family of memcached connections  to get
               TLS ticket keys.  If "auto" is given, both IPv4 and IPv6
@@ -1617,7 +1709,7 @@ SSL/TLS:
               cache.   This  enables   shared  session  cache  between
               multiple   nghttpx  instances.    Optionally,  memcached
               connection can be encrypted with TLS by specifying "tls"
-              keyword.
+              parameter.
   --tls-session-cache-memcached-address-family=(auto|IPv4|IPv6)
               Specify address family of memcached connections to store
               session cache.  If  "auto" is given, both  IPv4 and IPv6
@@ -1708,8 +1800,8 @@ HTTP/2 and SPDY:
 Mode:
   (default mode)
               Accept HTTP/2, SPDY and HTTP/1.1 over SSL/TLS.  "no-tls"
-              keyword is used in  --frontend option, accept HTTP/2 and
-              HTTP/1.1  over  cleartext  TCP.  The  incoming  HTTP/1.1
+              parameter is  used in  --frontend option,  accept HTTP/2
+              and HTTP/1.1 over cleartext  TCP.  The incoming HTTP/1.1
               connection  can  be  upgraded  to  HTTP/2  through  HTTP
               Upgrade.
   -s, --http2-proxy
@@ -1874,6 +1966,12 @@ HTTP:
               HTTP  status  code.  If  error  status  code comes  from
               backend server, the custom error pages are not used.
 
+API:
+  --api-max-request-body=<SIZE>
+              Set the maximum size of request body for API request.
+              Default: )" << util::utos_unit(get_config()->api.max_request_body)
+      << R"(
+
 Debug:
   --frontend-http2-dump-request-header=<PATH>
               Dumps request headers received by HTTP/2 frontend to the
@@ -1956,7 +2054,7 @@ void process_options(int argc, char **argv,
     std::set<StringRef> include_set;
 
     for (auto &p : cmdcfgs) {
-      if (parse_config(p.first, p.second, include_set) == -1) {
+      if (parse_config(mod_config(), p.first, p.second, include_set) == -1) {
         LOG(FATAL) << "Failed to parse command-line argument.";
         exit(EXIT_FAILURE);
       }
@@ -2057,9 +2155,10 @@ void process_options(int argc, char **argv,
 
   tlsconf.alpn_prefs = ssl::set_alpn_prefs(tlsconf.npn_list);
 
+  tlsconf.bio_method = create_bio_method();
+
   auto &listenerconf = mod_config()->conn.listener;
   auto &upstreamconf = mod_config()->conn.upstream;
-  auto &downstreamconf = mod_config()->conn.downstream;
 
   if (listenerconf.addrs.empty()) {
     UpstreamAddr addr{};
@@ -2093,149 +2192,9 @@ void process_options(int argc, char **argv,
     }
   }
 
-  auto &addr_groups = downstreamconf.addr_groups;
-
-  if (addr_groups.empty()) {
-    DownstreamAddrConfig addr{};
-    addr.host = ImmutableString::from_lit(DEFAULT_DOWNSTREAM_HOST);
-    addr.port = DEFAULT_DOWNSTREAM_PORT;
-
-    DownstreamAddrGroupConfig g(StringRef::from_lit("/"));
-    g.proto = PROTO_HTTP1;
-    g.addrs.push_back(std::move(addr));
-    mod_config()->router.add_route(StringRef{g.pattern}, addr_groups.size());
-    addr_groups.push_back(std::move(g));
-  } else if (get_config()->http2_proxy) {
-    // We don't support host mapping in these cases.  Move all
-    // non-catch-all patterns to catch-all pattern.
-    DownstreamAddrGroupConfig catch_all(StringRef::from_lit("/"));
-    auto proto = PROTO_NONE;
-    auto tls = false;
-    auto tls_seen = false;
-    for (auto &g : addr_groups) {
-      if (proto == PROTO_NONE) {
-        proto = g.proto;
-      } else if (proto != g.proto) {
-        LOG(ERROR) << SHRPX_OPT_BACKEND << ": <PATTERN> was ignored with "
-                                           "--http2-proxy, and protocol must "
-                                           "be the same for all backends.";
-        exit(EXIT_FAILURE);
-      }
-
-      if (!tls_seen) {
-        tls = g.tls;
-        tls_seen = true;
-      } else if (tls != g.tls) {
-        LOG(ERROR) << SHRPX_OPT_BACKEND
-                   << ": <PATTERN> was ignored with --http2-proxy, and tls "
-                      "must be enabled or disabled for all backends.";
-        exit(EXIT_FAILURE);
-      }
-
-      std::move(std::begin(g.addrs), std::end(g.addrs),
-                std::back_inserter(catch_all.addrs));
-    }
-    catch_all.proto = proto;
-    catch_all.tls = tls;
-    std::vector<DownstreamAddrGroupConfig>().swap(addr_groups);
-    std::vector<WildcardPattern>().swap(mod_config()->wildcard_patterns);
-    // maybe not necessary?
-    mod_config()->router = Router();
-    mod_config()->router.add_route(StringRef{catch_all.pattern},
-                                   addr_groups.size());
-    addr_groups.push_back(std::move(catch_all));
-  } else {
-    auto &wildcard_patterns = mod_config()->wildcard_patterns;
-    std::sort(std::begin(wildcard_patterns), std::end(wildcard_patterns),
-              [](const WildcardPattern &lhs, const WildcardPattern &rhs) {
-                return std::lexicographical_compare(
-                    rhs.host.rbegin(), rhs.host.rend(), lhs.host.rbegin(),
-                    lhs.host.rend());
-              });
-    if (LOG_ENABLED(INFO)) {
-      LOG(INFO) << "Reverse sorted wildcard hosts (compared from tail to head, "
-                   "and sorted in reverse order):";
-      for (auto &wp : mod_config()->wildcard_patterns) {
-        LOG(INFO) << wp.host;
-      }
-    }
-  }
-
-  if (LOG_ENABLED(INFO)) {
-    LOG(INFO) << "Resolving backend address";
-  }
-
-  ssize_t catch_all_group = -1;
-  for (size_t i = 0; i < addr_groups.size(); ++i) {
-    auto &g = addr_groups[i];
-    if (g.pattern == StringRef::from_lit("/")) {
-      catch_all_group = i;
-    }
-    if (LOG_ENABLED(INFO)) {
-      LOG(INFO) << "Host-path pattern: group " << i << ": '" << g.pattern
-                << "', proto=" << strproto(g.proto) << (g.tls ? ", tls" : "");
-      for (auto &addr : g.addrs) {
-        LOG(INFO) << "group " << i << " -> " << addr.host.c_str()
-                  << (addr.host_unix ? "" : ":" + util::utos(addr.port));
-      }
-    }
-  }
-
-  if (catch_all_group == -1) {
-    LOG(FATAL) << "backend: No catch-all backend address is configured";
+  if (configure_downstream_group(mod_config(), get_config()->http2_proxy, false,
+                                 tlsconf) != 0) {
     exit(EXIT_FAILURE);
-  }
-
-  downstreamconf.addr_group_catch_all = catch_all_group;
-
-  if (LOG_ENABLED(INFO)) {
-    LOG(INFO) << "Catch-all pattern is group " << catch_all_group;
-  }
-
-  for (auto &g : addr_groups) {
-    for (auto &addr : g.addrs) {
-
-      if (addr.host_unix) {
-        // for AF_UNIX socket, we use "localhost" as host for backend
-        // hostport.  This is used as Host header field to backend and
-        // not going to be passed to any syscalls.
-        addr.hostport = "localhost";
-
-        auto path = addr.host.c_str();
-        auto pathlen = addr.host.size();
-
-        if (pathlen + 1 > sizeof(addr.addr.su.un.sun_path)) {
-          LOG(FATAL) << "UNIX domain socket path " << path << " is too long > "
-                     << sizeof(addr.addr.su.un.sun_path);
-          exit(EXIT_FAILURE);
-        }
-
-        if (LOG_ENABLED(INFO)) {
-          LOG(INFO) << "Use UNIX domain socket path " << path
-                    << " for backend connection";
-        }
-
-        addr.addr.su.un.sun_family = AF_UNIX;
-        // copy path including terminal NULL
-        std::copy_n(path, pathlen + 1, addr.addr.su.un.sun_path);
-        addr.addr.len = sizeof(addr.addr.su.un);
-
-        continue;
-      }
-
-      addr.hostport = ImmutableString(
-          util::make_http_hostport(StringRef(addr.host), addr.port));
-
-      auto hostport = util::make_hostport(StringRef{addr.host}, addr.port);
-
-      if (resolve_hostname(&addr.addr, addr.host.c_str(), addr.port,
-                           downstreamconf.family) == -1) {
-        LOG(FATAL) << "Resolving backend address failed: " << hostport;
-        exit(EXIT_FAILURE);
-      }
-      LOG(NOTICE) << "Resolved backend address: " << hostport << " -> "
-                  << util::to_numeric_addr(&addr.addr);
-    }
   }
 
   auto &proxy = mod_config()->downstream_http_proxy;
@@ -2541,6 +2500,13 @@ int main(int argc, char **argv) {
         {SHRPX_OPT_BACKEND_CONNECTIONS_PER_HOST.c_str(), required_argument,
          &flag, 121},
         {SHRPX_OPT_ERROR_PAGE.c_str(), required_argument, &flag, 122},
+        {SHRPX_OPT_NO_KQUEUE.c_str(), no_argument, &flag, 123},
+        {SHRPX_OPT_FRONTEND_HTTP2_SETTINGS_TIMEOUT.c_str(), required_argument,
+         &flag, 124},
+        {SHRPX_OPT_BACKEND_HTTP2_SETTINGS_TIMEOUT.c_str(), required_argument,
+         &flag, 125},
+        {SHRPX_OPT_API_MAX_REQUEST_BODY.c_str(), required_argument, &flag, 126},
+        {SHRPX_OPT_BACKEND_MAX_BACKOFF.c_str(), required_argument, &flag, 127},
         {nullptr, 0, nullptr, 0}};
 
     int option_index = 0;
@@ -3115,6 +3081,28 @@ int main(int argc, char **argv) {
       case 122:
         // --error-page
         cmdcfgs.emplace_back(SHRPX_OPT_ERROR_PAGE, StringRef{optarg});
+        break;
+      case 123:
+        // --no-kqueue
+        cmdcfgs.emplace_back(SHRPX_OPT_NO_KQUEUE, StringRef::from_lit("yes"));
+        break;
+      case 124:
+        // --frontend-http2-settings-timeout
+        cmdcfgs.emplace_back(SHRPX_OPT_FRONTEND_HTTP2_SETTINGS_TIMEOUT,
+                             StringRef{optarg});
+        break;
+      case 125:
+        // --backend-http2-settings-timeout
+        cmdcfgs.emplace_back(SHRPX_OPT_BACKEND_HTTP2_SETTINGS_TIMEOUT,
+                             StringRef{optarg});
+        break;
+      case 126:
+        // --api-max-request-body
+        cmdcfgs.emplace_back(SHRPX_OPT_API_MAX_REQUEST_BODY, StringRef{optarg});
+        break;
+      case 127:
+        // --backend-max-backoff
+        cmdcfgs.emplace_back(SHRPX_OPT_BACKEND_MAX_BACKOFF, StringRef{optarg});
         break;
       default:
         break;

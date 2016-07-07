@@ -38,6 +38,8 @@
 #include <string>
 #include <iomanip>
 
+#include <iostream>
+
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -58,9 +60,11 @@
 #include "shrpx_http2_session.h"
 #include "shrpx_memcached_request.h"
 #include "shrpx_memcached_dispatcher.h"
+#include "shrpx_connection_handler.h"
 #include "util.h"
 #include "ssl.h"
 #include "template.h"
+#include "ssl_compat.h"
 
 using namespace nghttp2;
 
@@ -142,16 +146,39 @@ int servername_callback(SSL *ssl, int *al, void *arg) {
   auto handler = static_cast<ClientHandler *>(conn->data);
   auto worker = handler->get_worker();
   auto cert_tree = worker->get_cert_lookup_tree();
-  if (cert_tree) {
-    const char *hostname = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
-    if (hostname) {
-      auto len = strlen(hostname);
-      auto ssl_ctx = cert_tree->lookup(StringRef{hostname, len});
-      if (ssl_ctx) {
-        SSL_set_SSL_CTX(ssl, ssl_ctx);
-      }
-    }
+  if (!cert_tree) {
+    return SSL_TLSEXT_ERR_OK;
   }
+
+  std::array<uint8_t, NI_MAXHOST> buf;
+
+  auto rawhost = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+  if (rawhost == nullptr) {
+    return SSL_TLSEXT_ERR_OK;
+  }
+
+  auto len = strlen(rawhost);
+  // NI_MAXHOST includes terminal NULL.
+  if (len == 0 || len + 1 > buf.size()) {
+    return SSL_TLSEXT_ERR_OK;
+  }
+
+  auto end_buf = std::copy_n(rawhost, len, std::begin(buf));
+
+  util::inp_strlower(std::begin(buf), end_buf);
+
+  auto hostname = StringRef{std::begin(buf), end_buf};
+
+  auto idx = cert_tree->lookup(hostname);
+  if (idx == -1) {
+    return SSL_TLSEXT_ERR_OK;
+  }
+
+  auto conn_handler = worker->get_connection_handler();
+  auto ssl_ctx = conn_handler->get_ssl_ctx(idx);
+
+  SSL_set_SSL_CTX(ssl, ssl_ctx);
+
   return SSL_TLSEXT_ERR_OK;
 }
 } // namespace
@@ -243,8 +270,13 @@ int tls_session_new_cb(SSL *ssl, SSL_SESSION *session) {
 } // namespace
 
 namespace {
-SSL_SESSION *tls_session_get_cb(SSL *ssl, unsigned char *id, int idlen,
-                                int *copy) {
+SSL_SESSION *tls_session_get_cb(SSL *ssl,
+#if OPENSSL_101_API
+                                const unsigned char *id,
+#else  // !OPENSSL_101_API
+                                unsigned char *id,
+#endif // !OPENSSL_101_API
+                                int idlen, int *copy) {
   auto conn = static_cast<Connection *>(SSL_get_app_data(ssl));
   auto handler = static_cast<ClientHandler *>(conn->data);
   auto worker = handler->get_worker();
@@ -925,6 +957,7 @@ int verify_numeric_hostname(X509 *cert, const StringRef &hostname,
   if (altnames) {
     auto altnames_deleter = defer(GENERAL_NAMES_free, altnames);
     size_t n = sk_GENERAL_NAME_num(altnames);
+    auto ip_found = false;
     for (size_t i = 0; i < n; ++i) {
       auto altname = sk_GENERAL_NAME_value(altnames, i);
       if (altname->type != GEN_IPADD) {
@@ -937,9 +970,14 @@ int verify_numeric_hostname(X509 *cert, const StringRef &hostname,
       }
       size_t ip_addrlen = altname->d.iPAddress->length;
 
+      ip_found = true;
       if (addr->len == ip_addrlen && memcmp(saddr, ip_addr, ip_addrlen) == 0) {
         return 0;
       }
+    }
+
+    if (ip_found) {
+      return -1;
     }
   }
 
@@ -970,6 +1008,7 @@ int verify_hostname(X509 *cert, const StringRef &hostname,
   auto altnames = static_cast<GENERAL_NAMES *>(
       X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
   if (altnames) {
+    auto dns_found = false;
     auto altnames_deleter = defer(GENERAL_NAMES_free, altnames);
     size_t n = sk_GENERAL_NAME_num(altnames);
     for (size_t i = 0; i < n; ++i) {
@@ -984,15 +1023,33 @@ int verify_hostname(X509 *cert, const StringRef &hostname,
       }
 
       auto len = ASN1_STRING_length(altname->d.ia5);
+      if (len == 0) {
+        continue;
+      }
       if (std::find(name, name + len, '\0') != name + len) {
         // Embedded NULL is not permitted.
         continue;
       }
 
+      if (name[len - 1] == '.') {
+        --len;
+        if (len == 0) {
+          continue;
+        }
+      }
+
+      dns_found = true;
+
       if (tls_hostname_match(StringRef{name, static_cast<size_t>(len)},
                              hostname)) {
         return 0;
       }
+    }
+
+    // RFC 6125, section 6.4.4. says that client MUST not seek a match
+    // for CN if a dns dNSName is found.
+    if (dns_found) {
+      return -1;
     }
   }
 
@@ -1001,14 +1058,19 @@ int verify_hostname(X509 *cert, const StringRef &hostname,
     return -1;
   }
 
-  auto rv = util::strieq(hostname, cn);
-  OPENSSL_free(const_cast<char *>(cn.c_str()));
+  if (cn[cn.size() - 1] == '.') {
+    if (cn.size() == 1) {
+      OPENSSL_free(const_cast<char *>(cn.c_str()));
 
-  if (rv) {
-    return 0;
+      return -1;
+    }
+    cn = StringRef{cn.c_str(), cn.size() - 1};
   }
 
-  return -1;
+  auto rv = tls_hostname_match(cn, hostname);
+  OPENSSL_free(const_cast<char *>(cn.c_str()));
+
+  return rv ? 0 : -1;
 }
 } // namespace
 
@@ -1034,194 +1096,141 @@ int check_cert(SSL *ssl, const Address *addr, const StringRef &host) {
 }
 
 int check_cert(SSL *ssl, const DownstreamAddr *addr) {
-  auto &backend_sni_name = get_config()->tls.backend_sni_name;
-
-  auto hostname = !backend_sni_name.empty() ? StringRef(backend_sni_name)
-                                            : StringRef(addr->host);
+  auto hostname =
+      addr->sni.empty() ? StringRef{addr->host} : StringRef{addr->sni};
   return check_cert(ssl, &addr->addr, hostname);
 }
 
-CertLookupTree::CertLookupTree() {
-  root_.ssl_ctx = nullptr;
-  root_.str = nullptr;
-  root_.first = root_.last = 0;
-}
+CertLookupTree::CertLookupTree() {}
 
-namespace {
-// The |offset| is the index in the hostname we are examining.  We are
-// going to scan from |offset| in backwards.
-void cert_lookup_tree_add_cert(CertNode *node, SSL_CTX *ssl_ctx,
-                               const char *hostname, size_t len, int offset) {
-  int i, next_len = node->next.size();
-  char c = hostname[offset];
-  CertNode *cn = nullptr;
-  for (i = 0; i < next_len; ++i) {
-    cn = node->next[i].get();
-    if (cn->str[cn->first] == c) {
-      break;
-    }
+void CertLookupTree::add_cert(const StringRef &hostname, size_t idx) {
+  std::array<uint8_t, NI_MAXHOST> buf;
+
+  // NI_MAXHOST includes terminal NULL byte
+  if (hostname.empty() || hostname.size() + 1 > buf.size()) {
+    return;
   }
-  if (i == next_len) {
-    if (c == '*') {
-      // We assume hostname as wildcard hostname when first '*' is
-      // encountered. Note that as per RFC 6125 (6.4.3), there are
-      // some restrictions for wildcard hostname. We just ignore
-      // these rules here but do the proper check when we do the
-      // match.
-      node->wildcard_certs.push_back({ssl_ctx, hostname, len});
-      return;
-    }
 
-    int j;
-    auto new_node = make_unique<CertNode>();
-    new_node->str = hostname;
-    new_node->first = offset;
-    // If wildcard is found, set the region before it because we
-    // don't include it in [first, last).
-    for (j = offset; j >= 0 && hostname[j] != '*'; --j)
-      ;
-    new_node->last = j;
-    if (j == -1) {
-      new_node->ssl_ctx = ssl_ctx;
+  auto wildcard_it = std::find(std::begin(hostname), std::end(hostname), '*');
+  if (wildcard_it != std::end(hostname) &&
+      wildcard_it + 1 != std::end(hostname)) {
+    auto wildcard_prefix = StringRef{std::begin(hostname), wildcard_it};
+    auto wildcard_suffix = StringRef{wildcard_it + 1, std::end(hostname)};
+
+    auto rev_suffix = StringRef{std::begin(buf),
+                                std::reverse_copy(std::begin(wildcard_suffix),
+                                                  std::end(wildcard_suffix),
+                                                  std::begin(buf))};
+
+    WildcardPattern *wpat;
+
+    if (!rev_wildcard_router_.add_route(rev_suffix,
+                                        wildcard_patterns_.size())) {
+      auto wcidx = rev_wildcard_router_.match(rev_suffix);
+
+      assert(wcidx != -1);
+
+      wpat = &wildcard_patterns_[wcidx];
     } else {
-      new_node->ssl_ctx = nullptr;
-      new_node->wildcard_certs.push_back({ssl_ctx, hostname, len});
+      wildcard_patterns_.emplace_back();
+      wpat = &wildcard_patterns_.back();
     }
-    node->next.push_back(std::move(new_node));
+
+    auto rev_prefix = StringRef{std::begin(buf),
+                                std::reverse_copy(std::begin(wildcard_prefix),
+                                                  std::end(wildcard_prefix),
+                                                  std::begin(buf))};
+
+    wpat->rev_prefix.emplace_back(rev_prefix, idx);
+
     return;
   }
 
-  int j;
-  for (i = cn->first, j = offset;
-       i > cn->last && j >= 0 && cn->str[i] == hostname[j]; --i, --j)
-    ;
-  if (i == cn->last) {
-    if (j == -1) {
-      // If the same hostname already exists, we don't overwrite
-      // exiting ssl_ctx
-      if (!cn->ssl_ctx) {
-        cn->ssl_ctx = ssl_ctx;
+  router_.add_route(hostname, idx);
+}
+
+ssize_t CertLookupTree::lookup(const StringRef &hostname) {
+  std::array<uint8_t, NI_MAXHOST> buf;
+
+  // NI_MAXHOST includes terminal NULL byte
+  if (hostname.empty() || hostname.size() + 1 > buf.size()) {
+    return -1;
+  }
+
+  // Always prefer exact match
+  auto idx = router_.match(hostname);
+  if (idx != -1) {
+    return idx;
+  }
+
+  if (wildcard_patterns_.empty()) {
+    return -1;
+  }
+
+  ssize_t best_idx = -1;
+  size_t best_prefixlen = 0;
+  const RNode *last_node = nullptr;
+
+  auto rev_host = StringRef{
+      std::begin(buf), std::reverse_copy(std::begin(hostname),
+                                         std::end(hostname), std::begin(buf))};
+
+  for (;;) {
+    size_t nread = 0;
+
+    auto wcidx =
+        rev_wildcard_router_.match_prefix(&nread, &last_node, rev_host);
+    if (wcidx == -1) {
+      return best_idx;
+    }
+
+    // '*' must match at least one byte
+    if (nread == rev_host.size()) {
+      return best_idx;
+    }
+
+    rev_host = StringRef{std::begin(rev_host) + nread, std::end(rev_host)};
+
+    auto rev_prefix = StringRef{std::begin(rev_host) + 1, std::end(rev_host)};
+
+    auto &wpat = wildcard_patterns_[wcidx];
+    for (auto &wprefix : wpat.rev_prefix) {
+      if (!util::ends_with(rev_prefix, wprefix.prefix)) {
+        continue;
       }
-      return;
-    }
 
-    // The existing hostname is a suffix of this hostname.  Continue
-    // matching at potion j.
-    cert_lookup_tree_add_cert(cn, ssl_ctx, hostname, len, j);
-    return;
-  }
+      auto prefixlen =
+          wprefix.prefix.size() +
+          (reinterpret_cast<const uint8_t *>(&rev_host[0]) - &buf[0]);
 
-  {
-    auto new_node = make_unique<CertNode>();
-    new_node->ssl_ctx = cn->ssl_ctx;
-    new_node->str = cn->str;
-    new_node->first = i;
-    new_node->last = cn->last;
-    new_node->wildcard_certs.swap(cn->wildcard_certs);
-    new_node->next.swap(cn->next);
+      // Breaking a tie with longer suffix
+      if (prefixlen < best_prefixlen) {
+        continue;
+      }
 
-    cn->next.push_back(std::move(new_node));
-  }
-
-  cn->last = i;
-  if (j == -1) {
-    // This hostname is a suffix of the existing hostname.
-    cn->ssl_ctx = ssl_ctx;
-    return;
-  }
-
-  // This hostname and existing one share suffix.
-  cn->ssl_ctx = nullptr;
-  cert_lookup_tree_add_cert(cn, ssl_ctx, hostname, len, j);
-}
-} // namespace
-
-void CertLookupTree::add_cert(SSL_CTX *ssl_ctx, const StringRef &hostname) {
-  if (hostname.empty()) {
-    return;
-  }
-  // Copy hostname including terminal NULL
-  auto host_copy = make_unique<char[]>(hostname.size() + 1);
-  std::copy(std::begin(hostname), std::end(hostname), host_copy.get());
-  host_copy[hostname.size()] = '\0';
-  util::inp_strlower(&host_copy[0], &host_copy[0] + hostname.size());
-
-  cert_lookup_tree_add_cert(&root_, ssl_ctx, host_copy.get(), hostname.size(),
-                            hostname.size() - 1);
-
-  hosts_.push_back(std::move(host_copy));
-}
-
-namespace {
-SSL_CTX *cert_lookup_tree_lookup(CertNode *node, const StringRef &hostname,
-                                 int offset) {
-  int i, j;
-  for (i = node->first, j = offset;
-       i > node->last && j >= 0 && node->str[i] == util::lowcase(hostname[j]);
-       --i, --j)
-    ;
-  if (i != node->last) {
-    return nullptr;
-  }
-  if (j == -1) {
-    if (node->ssl_ctx) {
-      // exact match
-      return node->ssl_ctx;
-    }
-
-    // Do not perform wildcard-match because '*' must match at least
-    // one character.
-    return nullptr;
-  }
-
-  for (const auto &wildcert : node->wildcard_certs) {
-    if (tls_hostname_match(StringRef{wildcert.hostname, wildcert.hostnamelen},
-                           hostname)) {
-      return wildcert.ssl_ctx;
+      best_idx = wprefix.idx;
+      best_prefixlen = prefixlen;
     }
   }
-  auto c = util::lowcase(hostname[j]);
-  for (const auto &next_node : node->next) {
-    if (next_node->str[next_node->first] == c) {
-      return cert_lookup_tree_lookup(next_node.get(), hostname, j);
-    }
-  }
-  return nullptr;
-}
-} // namespace
-
-SSL_CTX *CertLookupTree::lookup(const StringRef &hostname) {
-  if (hostname.empty()) {
-    return nullptr;
-  }
-  return cert_lookup_tree_lookup(&root_, hostname, hostname.size() - 1);
 }
 
-int cert_lookup_tree_add_cert_from_file(CertLookupTree *lt, SSL_CTX *ssl_ctx,
-                                        const char *certfile) {
-  auto bio = BIO_new(BIO_s_file());
-  if (!bio) {
-    LOG(ERROR) << "BIO_new failed";
-    return -1;
-  }
-  auto bio_deleter = defer(BIO_vfree, bio);
-  if (!BIO_read_filename(bio, certfile)) {
-    LOG(ERROR) << "Could not read certificate file '" << certfile << "'";
-    return -1;
-  }
-  auto cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-  if (!cert) {
-    LOG(ERROR) << "Could not read X509 structure from file '" << certfile
-               << "'";
-    return -1;
-  }
-  auto cert_deleter = defer(X509_free, cert);
+void CertLookupTree::dump() const {
+  std::cerr << "exact:" << std::endl;
+  router_.dump();
+  std::cerr << "wildcard suffix (reversed):" << std::endl;
+  rev_wildcard_router_.dump();
+}
+
+int cert_lookup_tree_add_cert_from_x509(CertLookupTree *lt, size_t idx,
+                                        X509 *cert) {
+  std::array<uint8_t, NI_MAXHOST> buf;
 
   auto altnames = static_cast<GENERAL_NAMES *>(
       X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
   if (altnames) {
     auto altnames_deleter = defer(GENERAL_NAMES_free, altnames);
     size_t n = sk_GENERAL_NAME_num(altnames);
+    auto dns_found = false;
     for (size_t i = 0; i < n; ++i) {
       auto altname = sk_GENERAL_NAME_value(altnames, i);
       if (altname->type != GEN_DNS) {
@@ -1234,12 +1243,36 @@ int cert_lookup_tree_add_cert_from_file(CertLookupTree *lt, SSL_CTX *ssl_ctx,
       }
 
       auto len = ASN1_STRING_length(altname->d.ia5);
+      if (len == 0) {
+        continue;
+      }
       if (std::find(name, name + len, '\0') != name + len) {
         // Embedded NULL is not permitted.
         continue;
       }
 
-      lt->add_cert(ssl_ctx, StringRef{name, static_cast<size_t>(len)});
+      if (name[len - 1] == '.') {
+        --len;
+        if (len == 0) {
+          continue;
+        }
+      }
+
+      dns_found = true;
+
+      if (static_cast<size_t>(len) + 1 > buf.size()) {
+        continue;
+      }
+
+      auto end_buf = std::copy_n(name, len, std::begin(buf));
+      util::inp_strlower(std::begin(buf), end_buf);
+
+      lt->add_cert(StringRef{std::begin(buf), end_buf}, idx);
+    }
+
+    // Don't bother CN if we have dNSName.
+    if (dns_found) {
+      return 0;
     }
   }
 
@@ -1248,9 +1281,23 @@ int cert_lookup_tree_add_cert_from_file(CertLookupTree *lt, SSL_CTX *ssl_ctx,
     return 0;
   }
 
-  lt->add_cert(ssl_ctx, cn);
+  if (cn[cn.size() - 1] == '.') {
+    if (cn.size() == 1) {
+      OPENSSL_free(const_cast<char *>(cn.c_str()));
+
+      return 0;
+    }
+
+    cn = StringRef{cn.c_str(), cn.size() - 1};
+  }
+
+  auto end_buf = std::copy(std::begin(cn), std::end(cn), std::begin(buf));
 
   OPENSSL_free(const_cast<char *>(cn.c_str()));
+
+  util::inp_strlower(std::begin(buf), end_buf);
+
+  lt->add_cert(StringRef{std::begin(buf), end_buf}, idx);
 
   return 0;
 }
@@ -1269,6 +1316,26 @@ bool upstream_tls_enabled() {
   const auto &faddrs = get_config()->conn.listener.addrs;
   return std::any_of(std::begin(faddrs), std::end(faddrs),
                      [](const UpstreamAddr &faddr) { return faddr.tls; });
+}
+
+X509 *load_certificate(const char *filename) {
+  auto bio = BIO_new(BIO_s_file());
+  if (!bio) {
+    fprintf(stderr, "BIO_new() failed\n");
+    return nullptr;
+  }
+  auto bio_deleter = defer(BIO_vfree, bio);
+  if (!BIO_read_filename(bio, filename)) {
+    fprintf(stderr, "Could not read certificate file '%s'\n", filename);
+    return nullptr;
+  }
+  auto cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+  if (!cert) {
+    fprintf(stderr, "Could not read X509 structure from file '%s'\n", filename);
+    return nullptr;
+  }
+
+  return cert;
 }
 
 SSL_CTX *setup_server_ssl_context(std::vector<SSL_CTX *> &all_ssl_ctx,
@@ -1304,36 +1371,51 @@ SSL_CTX *setup_server_ssl_context(std::vector<SSL_CTX *> &all_ssl_ctx,
     return ssl_ctx;
   }
 
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x10002000L
+  auto cert = SSL_CTX_get0_certificate(ssl_ctx);
+#else  // defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER <
+  // 0x10002000L
+  auto cert = load_certificate(tlsconf.cert_file.c_str());
+  auto cert_deleter = defer(X509_free, cert);
+#endif // defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER <
+       // 0x10002000L
+
+  if (ssl::cert_lookup_tree_add_cert_from_x509(
+          cert_tree, all_ssl_ctx.size() - 1, cert) == -1) {
+    LOG(FATAL) << "Failed to add default certificate.";
+    DIE();
+  }
+
   for (auto &keycert : tlsconf.subcerts) {
+    auto &priv_key_file = keycert.first;
+    auto &cert_file = keycert.second;
+
     auto ssl_ctx =
-        ssl::create_ssl_context(keycert.first.c_str(), keycert.second.c_str()
+        ssl::create_ssl_context(priv_key_file.c_str(), cert_file.c_str()
 #ifdef HAVE_NEVERBLEED
                                                            ,
                                 nb
 #endif // HAVE_NEVERBLEED
                                 );
     all_ssl_ctx.push_back(ssl_ctx);
-    if (ssl::cert_lookup_tree_add_cert_from_file(
-            cert_tree, ssl_ctx, keycert.second.c_str()) == -1) {
+
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x10002000L
+    auto cert = SSL_CTX_get0_certificate(ssl_ctx);
+#else  // defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER <
+    // 0x10002000L
+    auto cert = load_certificate(cert_file.c_str());
+    auto cert_deleter = defer(X509_free, cert);
+#endif // defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER <
+       // 0x10002000L
+
+    if (ssl::cert_lookup_tree_add_cert_from_x509(
+            cert_tree, all_ssl_ctx.size() - 1, cert) == -1) {
       LOG(FATAL) << "Failed to add sub certificate.";
       DIE();
     }
   }
 
-  if (ssl::cert_lookup_tree_add_cert_from_file(
-          cert_tree, ssl_ctx, tlsconf.cert_file.c_str()) == -1) {
-    LOG(FATAL) << "Failed to add default certificate.";
-    DIE();
-  }
-
   return ssl_ctx;
-}
-
-bool downstream_tls_enabled() {
-  const auto &groups = get_config()->conn.downstream.addr_groups;
-
-  return std::any_of(std::begin(groups), std::end(groups),
-                     [](const DownstreamAddrGroupConfig &g) { return g.tls; });
 }
 
 SSL_CTX *setup_downstream_client_ssl_context(
@@ -1341,10 +1423,6 @@ SSL_CTX *setup_downstream_client_ssl_context(
     neverbleed_t *nb
 #endif // HAVE_NEVERBLEED
     ) {
-  if (!downstream_tls_enabled()) {
-    return nullptr;
-  }
-
   auto &tlsconf = get_config()->tls;
 
   return ssl::create_ssl_client_context(
@@ -1370,11 +1448,11 @@ void setup_downstream_http1_alpn(SSL *ssl) {
 #endif // OPENSSL_VERSION_NUMBER >= 0x10002000L
 }
 
-CertLookupTree *create_cert_lookup_tree() {
+std::unique_ptr<CertLookupTree> create_cert_lookup_tree() {
   if (!upstream_tls_enabled() || get_config()->tls.subcerts.empty()) {
     return nullptr;
   }
-  return new ssl::CertLookupTree();
+  return make_unique<CertLookupTree>();
 }
 
 namespace {
@@ -1388,13 +1466,11 @@ std::vector<uint8_t> serialize_ssl_session(SSL_SESSION *session) {
 }
 } // namespace
 
-void try_cache_tls_session(DownstreamAddr *addr, SSL_SESSION *session,
-                           ev_tstamp t) {
-  auto &cache = addr->tls_session_cache;
-
+void try_cache_tls_session(TLSSessionCache &cache, const Address &addr,
+                           SSL_SESSION *session, ev_tstamp t) {
   if (cache.last_updated + 1_min > t) {
     if (LOG_ENABLED(INFO)) {
-      LOG(INFO) << "Cache for addr=" << util::to_numeric_addr(&addr->addr)
+      LOG(INFO) << "Cache for addr=" << util::to_numeric_addr(&addr)
                 << " is still host.  Not updating.";
     }
     return;
@@ -1402,7 +1478,7 @@ void try_cache_tls_session(DownstreamAddr *addr, SSL_SESSION *session,
 
   if (LOG_ENABLED(INFO)) {
     LOG(INFO) << "Update cache entry for SSL_SESSION=" << session
-              << ", addr=" << util::to_numeric_addr(&addr->addr)
+              << ", addr=" << util::to_numeric_addr(&addr)
               << ", timestamp=" << std::fixed << std::setprecision(6) << t;
   }
 
@@ -1410,9 +1486,7 @@ void try_cache_tls_session(DownstreamAddr *addr, SSL_SESSION *session,
   cache.last_updated = t;
 }
 
-SSL_SESSION *reuse_tls_session(const DownstreamAddr *addr) {
-  auto &cache = addr->tls_session_cache;
-
+SSL_SESSION *reuse_tls_session(const TLSSessionCache &cache) {
   if (cache.session_data.empty()) {
     return nullptr;
   }

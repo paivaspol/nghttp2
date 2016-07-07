@@ -408,6 +408,7 @@ static int session_new(nghttp2_session **session_ptr,
                        void *user_data, int server,
                        const nghttp2_option *option, nghttp2_mem *mem) {
   int rv;
+  size_t nbuffer;
 
   if (mem == NULL) {
     mem = nghttp2_mem_default();
@@ -460,16 +461,6 @@ static int session_new(nghttp2_session **session_ptr,
     (*session_ptr)->server = 1;
   }
 
-  /* 1 for Pad Field. */
-  rv = nghttp2_bufs_init3(&(*session_ptr)->aob.framebufs,
-                          NGHTTP2_FRAMEBUF_CHUNKLEN, NGHTTP2_FRAMEBUF_MAX_NUM,
-                          1, NGHTTP2_FRAME_HDLEN + 1, mem);
-  if (rv != 0) {
-    goto fail_aob_framebuf;
-  }
-
-  active_outbound_item_reset(&(*session_ptr)->aob, mem);
-
   init_settings(&(*session_ptr)->remote_settings);
   init_settings(&(*session_ptr)->local_settings);
 
@@ -478,6 +469,8 @@ static int session_new(nghttp2_session **session_ptr,
 
   /* Limit max outgoing concurrent streams to sensible value */
   (*session_ptr)->remote_settings.max_concurrent_streams = 100;
+
+  (*session_ptr)->max_send_header_block_length = NGHTTP2_MAX_HEADERSLEN;
 
   if (option) {
     if ((option->opt_set_mask & NGHTTP2_OPT_NO_AUTO_WINDOW_UPDATE) &&
@@ -523,7 +516,30 @@ static int session_new(nghttp2_session **session_ptr,
         option->no_auto_ping_ack) {
       (*session_ptr)->opt_flags |= NGHTTP2_OPTMASK_NO_AUTO_PING_ACK;
     }
+
+    if (option->opt_set_mask & NGHTTP2_OPT_MAX_SEND_HEADER_BLOCK_LENGTH) {
+      (*session_ptr)->max_send_header_block_length =
+          option->max_send_header_block_length;
+    }
   }
+
+  nbuffer = ((*session_ptr)->max_send_header_block_length +
+             NGHTTP2_FRAMEBUF_CHUNKLEN - 1) /
+            NGHTTP2_FRAMEBUF_CHUNKLEN;
+
+  if (nbuffer == 0) {
+    nbuffer = 1;
+  }
+
+  /* 1 for Pad Field. */
+  rv = nghttp2_bufs_init3(&(*session_ptr)->aob.framebufs,
+                          NGHTTP2_FRAMEBUF_CHUNKLEN, nbuffer, 1,
+                          NGHTTP2_FRAME_HDLEN + 1, mem);
+  if (rv != 0) {
+    goto fail_aob_framebuf;
+  }
+
+  active_outbound_item_reset(&(*session_ptr)->aob, mem);
 
   (*session_ptr)->callbacks = *callbacks;
   (*session_ptr)->user_data = user_data;
@@ -1764,6 +1780,9 @@ static int session_predicate_altsvc_send(nghttp2_session *session,
   if (stream == NULL) {
     return NGHTTP2_ERR_STREAM_CLOSED;
   }
+  if (stream->state == NGHTTP2_STREAM_CLOSING) {
+    return NGHTTP2_ERR_STREAM_CLOSING;
+  }
 
   return 0;
 }
@@ -2016,7 +2035,7 @@ static int session_prep_frame(nghttp2_session *session,
             session, frame->headers.nva, frame->headers.nvlen,
             NGHTTP2_PRIORITY_SPECLEN);
 
-        if (estimated_payloadlen > NGHTTP2_MAX_HEADERSLEN) {
+        if (estimated_payloadlen > session->max_send_header_block_length) {
           return NGHTTP2_ERR_FRAME_SIZE_ERROR;
         }
 
@@ -2035,7 +2054,7 @@ static int session_prep_frame(nghttp2_session *session,
             session, frame->headers.nva, frame->headers.nvlen,
             NGHTTP2_PRIORITY_SPECLEN);
 
-        if (estimated_payloadlen > NGHTTP2_MAX_HEADERSLEN) {
+        if (estimated_payloadlen > session->max_send_header_block_length) {
           return NGHTTP2_ERR_FRAME_SIZE_ERROR;
         }
 
@@ -2155,7 +2174,7 @@ static int session_prep_frame(nghttp2_session *session,
       estimated_payloadlen = session_estimate_headers_payload(
           session, frame->push_promise.nva, frame->push_promise.nvlen, 0);
 
-      if (estimated_payloadlen > NGHTTP2_MAX_HEADERSLEN) {
+      if (estimated_payloadlen > session->max_send_header_block_length) {
         return NGHTTP2_ERR_FRAME_SIZE_ERROR;
       }
 
@@ -2509,6 +2528,10 @@ static int session_call_before_frame_send(nghttp2_session *session,
   if (session->callbacks.before_frame_send_callback) {
     rv = session->callbacks.before_frame_send_callback(session, frame,
                                                        session->user_data);
+    if (rv == NGHTTP2_ERR_CANCEL) {
+      return rv;
+    }
+
     if (rv != 0) {
       return NGHTTP2_ERR_CALLBACK_FAILURE;
     }
@@ -3051,7 +3074,6 @@ static ssize_t nghttp2_session_mem_send_internal(nghttp2_session *session,
     return rv;
   }
 
-  *data_ptr = NULL;
   for (;;) {
     switch (aob->state) {
     case NGHTTP2_OB_POP_ITEM: {
@@ -3154,6 +3176,51 @@ static ssize_t nghttp2_session_mem_send_internal(nghttp2_session *session,
         rv = session_call_before_frame_send(session, frame);
         if (nghttp2_is_fatal(rv)) {
           return rv;
+        }
+
+        if (rv == NGHTTP2_ERR_CANCEL) {
+          int32_t opened_stream_id = 0;
+          uint32_t error_code = NGHTTP2_INTERNAL_ERROR;
+
+          if (session->callbacks.on_frame_not_send_callback) {
+            if (session->callbacks.on_frame_not_send_callback(
+                    session, frame, rv, session->user_data) != 0) {
+              return NGHTTP2_ERR_CALLBACK_FAILURE;
+            }
+          }
+
+          /* We have to close stream opened by canceled request
+             HEADERS or PUSH_PROMISE. */
+          switch (item->frame.hd.type) {
+          case NGHTTP2_HEADERS:
+            if (item->frame.headers.cat == NGHTTP2_HCAT_REQUEST) {
+              opened_stream_id = item->frame.hd.stream_id;
+              /* We don't have to check
+                 item->aux_data.headers.canceled since it has already
+                 been checked. */
+              /* Set error_code to REFUSED_STREAM so that application
+                 can send request again. */
+              error_code = NGHTTP2_REFUSED_STREAM;
+            }
+            break;
+          case NGHTTP2_PUSH_PROMISE:
+            opened_stream_id = item->frame.push_promise.promised_stream_id;
+            break;
+          }
+          if (opened_stream_id) {
+            /* careful not to override rv */
+            int rv2;
+            rv2 = nghttp2_session_close_stream(session, opened_stream_id,
+                                               error_code);
+
+            if (nghttp2_is_fatal(rv2)) {
+              return rv2;
+            }
+          }
+
+          active_outbound_item_reset(aob, mem);
+
+          break;
         }
       } else {
         DEBUGF(fprintf(stderr, "send: next frame: DATA\n"));
@@ -3308,6 +3375,8 @@ ssize_t nghttp2_session_mem_send(nghttp2_session *session,
   int rv;
   ssize_t len;
 
+  *data_ptr = NULL;
+
   len = nghttp2_session_mem_send_internal(session, data_ptr, 1);
   if (len <= 0) {
     return len;
@@ -3329,7 +3398,7 @@ ssize_t nghttp2_session_mem_send(nghttp2_session *session,
 }
 
 int nghttp2_session_send(nghttp2_session *session) {
-  const uint8_t *data;
+  const uint8_t *data = NULL;
   ssize_t datalen;
   ssize_t sentlen;
   nghttp2_bufs *framebufs;
@@ -3642,8 +3711,8 @@ static int inflate_header_block(nghttp2_session *session, nghttp2_frame *frame,
   DEBUGF(fprintf(stderr, "recv: decoding header block %zu bytes\n", inlen));
   for (;;) {
     inflate_flags = 0;
-    proclen = nghttp2_hd_inflate_hd2(&session->hd_inflater, &nv, &inflate_flags,
-                                     in, inlen, final);
+    proclen = nghttp2_hd_inflate_hd_nv(&session->hd_inflater, &nv,
+                                       &inflate_flags, in, inlen, final);
     if (nghttp2_is_fatal((int)proclen)) {
       return (int)proclen;
     }
@@ -6847,17 +6916,12 @@ int nghttp2_session_add_window_update(nghttp2_session *session, uint8_t flags,
 static void
 session_append_inflight_settings(nghttp2_session *session,
                                  nghttp2_inflight_settings *settings) {
-  nghttp2_inflight_settings *i;
+  nghttp2_inflight_settings **i;
 
-  if (!session->inflight_settings_head) {
-    session->inflight_settings_head = settings;
-    return;
-  }
-
-  for (i = session->inflight_settings_head; i->next; i = i->next)
+  for (i = &session->inflight_settings_head; *i; i = &(*i)->next)
     ;
 
-  i->next = settings;
+  *i = settings;
 }
 
 int nghttp2_session_add_settings(nghttp2_session *session, uint8_t flags,
@@ -6931,9 +6995,9 @@ int nghttp2_session_add_settings(nghttp2_session *session, uint8_t flags,
 
   if (flags & NGHTTP2_FLAG_ACK) {
     ++session->obq_flood_counter_;
+  } else {
+    session_append_inflight_settings(session, inflight_settings);
   }
-
-  session_append_inflight_settings(session, inflight_settings);
 
   /* Extract NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS and ENABLE_PUSH
      here.  We use it to refuse the incoming stream and PUSH_PROMISE
@@ -7202,6 +7266,14 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
   }
 
   reschedule_stream(stream);
+
+  if (frame->hd.length == 0 && (data_flags & NGHTTP2_DATA_FLAG_EOF) &&
+      (data_flags & NGHTTP2_DATA_FLAG_NO_END_STREAM)) {
+    /* DATA payload length is 0, and DATA frame does not bear
+       END_STREAM.  In this case, there is no point to send 0 length
+       DATA frame. */
+    return NGHTTP2_ERR_CANCEL;
+  }
 
   return 0;
 }

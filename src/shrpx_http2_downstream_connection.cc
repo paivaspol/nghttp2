@@ -95,9 +95,7 @@ int Http2DownstreamConnection::attach_downstream(Downstream *downstream) {
     DCLOG(INFO, this) << "Attaching to DOWNSTREAM:" << downstream;
   }
   http2session_->add_downstream_connection(this);
-  if (http2session_->get_state() == Http2Session::DISCONNECTED) {
-    http2session_->signal_write();
-  }
+  http2session_->signal_write();
 
   downstream_ = downstream;
   downstream_->reset_downstream_rtimer();
@@ -181,24 +179,11 @@ ssize_t http2_data_read_callback(nghttp2_session *session, int32_t stream_id,
   }
   const auto &req = downstream->request();
   auto input = downstream->get_request_buf();
-  auto nread = input->remove(buf, length);
-  auto input_empty = input->rleft() == 0;
 
-  if (nread > 0) {
-    // This is important because it will handle flow control
-    // stuff.
-    if (downstream->get_upstream()->resume_read(SHRPX_NO_BUFFER, downstream,
-                                                nread) != 0) {
-      // In this case, downstream may be deleted.
-      return NGHTTP2_ERR_CALLBACK_FAILURE;
-    }
+  auto nread = std::min(input->rleft(), length);
+  auto input_empty = input->rleft() == nread;
 
-    // Check dconn is still alive because Upstream::resume_read()
-    // may delete downstream which will delete dconn.
-    if (sd->dconn == nullptr) {
-      return NGHTTP2_ERR_DEFERRED;
-    }
-  }
+  *data_flags |= NGHTTP2_DATA_FLAG_NO_COPY;
 
   if (input_empty &&
       downstream->get_request_state() == Downstream::MSG_COMPLETE &&
@@ -229,12 +214,6 @@ ssize_t http2_data_read_callback(nghttp2_session *session, int32_t stream_id,
         }
       }
     }
-  }
-
-  if (!input_empty) {
-    downstream->reset_downstream_wtimer();
-  } else {
-    downstream->disable_downstream_wtimer();
   }
 
   if (nread == 0 && (*data_flags & NGHTTP2_DATA_FLAG_EOF) == 0) {
@@ -331,13 +310,6 @@ int Http2DownstreamConnection::push_request_headers() {
   }
 
   http2::copy_headers_to_nva_nocopy(nva, req.fs.headers());
-
-  bool chunked_encoding = false;
-  auto transfer_encoding = req.fs.header(http2::HD_TRANSFER_ENCODING);
-  if (transfer_encoding &&
-      util::strieq_l("chunked", (*transfer_encoding).value)) {
-    chunked_encoding = true;
-  }
 
   if (!http2conf.no_cookie_crumbling) {
     downstream_->crumble_request_cookie(nva);
@@ -447,11 +419,12 @@ int Http2DownstreamConnection::push_request_headers() {
     DCLOG(INFO, this) << "HTTP request headers\n" << ss.str();
   }
 
-  auto content_length = req.fs.header(http2::HD_CONTENT_LENGTH);
-  // TODO check content-length: 0 case
+  auto transfer_encoding = req.fs.header(http2::HD_TRANSFER_ENCODING);
 
-  if (req.method == HTTP_CONNECT || chunked_encoding || content_length ||
-      req.http2_expect_body) {
+  // Add body as long as transfer-encoding is given even if
+  // req.fs.content_length == 0 to forward trailer fields.
+  if (req.method == HTTP_CONNECT || transfer_encoding ||
+      req.fs.content_length > 0 || req.http2_expect_body) {
     // Request-body is expected.
     nghttp2_data_provider data_prd{{}, http2_data_read_callback};
     rv = http2session_->submit_request(this, nva.data(), nva.size(), &data_prd);
@@ -506,8 +479,7 @@ int Http2DownstreamConnection::resume_read(IOCtrlReason reason,
                                            size_t consumed) {
   int rv;
 
-  if (http2session_->get_state() != Http2Session::CONNECTED ||
-      !http2session_->get_flow_control()) {
+  if (http2session_->get_state() != Http2Session::CONNECTED) {
     return 0;
   }
 
@@ -570,5 +542,7 @@ DownstreamAddrGroup *
 Http2DownstreamConnection::get_downstream_addr_group() const {
   return http2session_->get_downstream_addr_group();
 }
+
+DownstreamAddr *Http2DownstreamConnection::get_addr() const { return nullptr; }
 
 } // namespace shrpx

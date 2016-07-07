@@ -141,7 +141,6 @@ private:
   ClientHandler *handler_;
   nghttp2_session *session_;
   bool flow_control_;
-  bool shutdown_handled_;
   // ADDITIONAL
   DependencyReader dep_reader_;
   // END ADDITIONAL

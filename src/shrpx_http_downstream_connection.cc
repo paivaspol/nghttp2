@@ -70,6 +70,31 @@ void timeoutcb(struct ev_loop *loop, ev_timer *w, int revents) {
 } // namespace
 
 namespace {
+void connect_timeoutcb(struct ev_loop *loop, ev_timer *w, int revents) {
+  auto conn = static_cast<Connection *>(w->data);
+  auto dconn = static_cast<HttpDownstreamConnection *>(conn->data);
+
+  if (LOG_ENABLED(INFO)) {
+    DCLOG(INFO, dconn) << "Connect time out";
+  }
+
+  downstream_failure(dconn->get_addr());
+
+  auto downstream = dconn->get_downstream();
+  auto upstream = downstream->get_upstream();
+  auto handler = upstream->get_client_handler();
+  auto &resp = downstream->response();
+
+  // Do this so that dconn is not pooled
+  resp.connection_close = true;
+
+  if (upstream->downstream_error(dconn, Downstream::EVENT_TIMEOUT) != 0) {
+    delete handler;
+  }
+}
+} // namespace
+
+namespace {
 void readcb(struct ev_loop *loop, ev_io *w, int revents) {
   auto conn = static_cast<Connection *>(w->data);
   auto dconn = static_cast<HttpDownstreamConnection *>(conn->data);
@@ -105,6 +130,17 @@ void connectcb(struct ev_loop *loop, ev_io *w, int revents) {
   auto upstream = downstream->get_upstream();
   auto handler = upstream->get_client_handler();
   if (dconn->connected() != 0) {
+    downstream->pop_downstream_connection();
+
+    auto ndconn = handler->get_downstream_connection(downstream);
+    if (ndconn) {
+      if (downstream->attach_downstream_connection(std::move(ndconn)) == 0) {
+        return;
+      }
+    }
+
+    downstream->set_request_state(Downstream::CONNECT_FAIL);
+
     if (upstream->on_downstream_abort_request(downstream, 503) != 0) {
       delete handler;
     }
@@ -114,24 +150,31 @@ void connectcb(struct ev_loop *loop, ev_io *w, int revents) {
 }
 } // namespace
 
-HttpDownstreamConnection::HttpDownstreamConnection(DownstreamAddrGroup *group,
-                                                   struct ev_loop *loop,
-                                                   Worker *worker)
+HttpDownstreamConnection::HttpDownstreamConnection(
+    const std::shared_ptr<DownstreamAddrGroup> &group, ssize_t initial_addr_idx,
+    struct ev_loop *loop, Worker *worker)
     : conn_(loop, -1, nullptr, worker->get_mcpool(),
-            get_config()->conn.downstream.timeout.write,
-            get_config()->conn.downstream.timeout.read, {}, {}, connectcb,
-            readcb, timeoutcb, this, get_config()->tls.dyn_rec.warmup_threshold,
+            worker->get_downstream_config()->timeout.write,
+            worker->get_downstream_config()->timeout.read, {}, {}, connectcb,
+            readcb, connect_timeoutcb, this,
+            get_config()->tls.dyn_rec.warmup_threshold,
             get_config()->tls.dyn_rec.idle_timeout, PROTO_HTTP1),
       do_read_(&HttpDownstreamConnection::noop),
       do_write_(&HttpDownstreamConnection::noop),
+      do_signal_write_(&HttpDownstreamConnection::noop),
       worker_(worker),
-      ssl_ctx_(group->shared_addr->tls ? worker->get_cl_ssl_ctx() : nullptr),
+      ssl_ctx_(worker->get_cl_ssl_ctx()),
       group_(group),
       addr_(nullptr),
       ioctrl_(&conn_.rlimit),
-      response_htp_{0} {}
+      response_htp_{0},
+      initial_addr_idx_(initial_addr_idx) {}
 
-HttpDownstreamConnection::~HttpDownstreamConnection() {}
+HttpDownstreamConnection::~HttpDownstreamConnection() {
+  if (LOG_ENABLED(INFO)) {
+    DCLOG(INFO, this) << "Deleted";
+  }
+}
 
 int HttpDownstreamConnection::attach_downstream(Downstream *downstream) {
   if (LOG_ENABLED(INFO)) {
@@ -147,29 +190,32 @@ int HttpDownstreamConnection::attach_downstream(Downstream *downstream) {
     return SHRPX_ERR_NETWORK;
   }
 
-  auto &downstreamconf = get_config()->conn.downstream;
+  auto &downstreamconf = *worker_->get_downstream_config();
 
   if (conn_.fd == -1) {
-    if (ssl_ctx_) {
-      auto ssl = ssl::create_ssl(ssl_ctx_);
-      if (!ssl) {
-        return -1;
-      }
-
-      ssl::setup_downstream_http1_alpn(ssl);
-
-      conn_.set_ssl(ssl);
-    }
-
     auto &shared_addr = group_->shared_addr;
     auto &addrs = shared_addr->addrs;
-    auto &next_downstream = shared_addr->next;
+
+    // If session affinity is enabled, we always start with address at
+    // initial_addr_idx_.
+    size_t temp_idx = initial_addr_idx_;
+
+    auto &next_downstream =
+        shared_addr->affinity == AFFINITY_NONE ? shared_addr->next : temp_idx;
     auto end = next_downstream;
     for (;;) {
       auto &addr = addrs[next_downstream];
 
       if (++next_downstream >= addrs.size()) {
         next_downstream = 0;
+      }
+
+      if (addr.proto != PROTO_HTTP1) {
+        if (end == next_downstream) {
+          return SHRPX_ERR_NETWORK;
+        }
+
+        continue;
       }
 
       auto &connect_blocker = addr.connect_blocker;
@@ -211,7 +257,8 @@ int HttpDownstreamConnection::attach_downstream(Downstream *downstream) {
                           << util::to_numeric_addr(&addr.addr)
                           << ", errno=" << error;
 
-        connect_blocker->on_failure();
+        downstream_failure(&addr);
+
         close(conn_.fd);
         conn_.fd = -1;
 
@@ -229,15 +276,25 @@ int HttpDownstreamConnection::attach_downstream(Downstream *downstream) {
 
       addr_ = &addr;
 
-      if (ssl_ctx_) {
-        auto sni_name = !get_config()->tls.backend_sni_name.empty()
-                            ? StringRef(get_config()->tls.backend_sni_name)
-                            : StringRef(addr_->host);
+      if (addr_->tls) {
+        assert(ssl_ctx_);
+
+        auto ssl = ssl::create_ssl(ssl_ctx_);
+        if (!ssl) {
+          return -1;
+        }
+
+        ssl::setup_downstream_http1_alpn(ssl);
+
+        conn_.set_ssl(ssl);
+
+        auto sni_name =
+            addr_->sni.empty() ? StringRef{addr_->host} : StringRef{addr_->sni};
         if (!util::numeric_host(sni_name.c_str())) {
           SSL_set_tlsext_host_name(conn_.tls.ssl, sni_name.c_str());
         }
 
-        auto session = ssl::reuse_tls_session(addr_);
+        auto session = ssl::reuse_tls_session(addr_->tls_session_cache);
         if (session) {
           SSL_set_session(conn_.tls.ssl, session);
           SSL_SESSION_free(session);
@@ -260,7 +317,8 @@ int HttpDownstreamConnection::attach_downstream(Downstream *downstream) {
     // we may set read timer cb to idle_timeoutcb.  Reset again.
     conn_.rt.repeat = downstreamconf.timeout.read;
     ev_set_cb(&conn_.rt, timeoutcb);
-    ev_timer_again(conn_.loop, &conn_.rt);
+    ev_timer_stop(conn_.loop, &conn_.rt);
+
     ev_set_cb(&conn_.rev, readcb);
   }
 
@@ -330,9 +388,9 @@ int HttpDownstreamConnection::push_request_headers() {
     buf->append("\r\n");
   }
 
-  if (!connect_method && req.http2_expect_body &&
-      !req.fs.header(http2::HD_CONTENT_LENGTH)) {
-
+  // set transfer-encoding only when content-length is unknown and
+  // request body is expected.
+  if (!connect_method && req.http2_expect_body && req.fs.content_length == -1) {
     downstream_->set_chunked_request(true);
     buf->append("Transfer-Encoding: chunked\r\n");
   }
@@ -509,15 +567,32 @@ int HttpDownstreamConnection::end_upload_data() {
 }
 
 namespace {
+void remove_from_pool(HttpDownstreamConnection *dconn) {
+  auto group = dconn->get_downstream_addr_group();
+  auto &shared_addr = group->shared_addr;
+
+  if (shared_addr->affinity == AFFINITY_NONE) {
+    auto &dconn_pool =
+        dconn->get_downstream_addr_group()->shared_addr->dconn_pool;
+    dconn_pool.remove_downstream_connection(dconn);
+    return;
+  }
+
+  auto addr = dconn->get_addr();
+  auto &dconn_pool = addr->dconn_pool;
+  dconn_pool->remove_downstream_connection(dconn);
+}
+} // namespace
+
+namespace {
 void idle_readcb(struct ev_loop *loop, ev_io *w, int revents) {
   auto conn = static_cast<Connection *>(w->data);
   auto dconn = static_cast<HttpDownstreamConnection *>(conn->data);
   if (LOG_ENABLED(INFO)) {
     DCLOG(INFO, dconn) << "Idle connection EOF";
   }
-  auto &dconn_pool =
-      dconn->get_downstream_addr_group()->shared_addr->dconn_pool;
-  dconn_pool.remove_downstream_connection(dconn);
+
+  remove_from_pool(dconn);
   // dconn was deleted
 }
 } // namespace
@@ -529,9 +604,8 @@ void idle_timeoutcb(struct ev_loop *loop, ev_timer *w, int revents) {
   if (LOG_ENABLED(INFO)) {
     DCLOG(INFO, dconn) << "Idle connection timeout";
   }
-  auto &dconn_pool =
-      dconn->get_downstream_addr_group()->shared_addr->dconn_pool;
-  dconn_pool.remove_downstream_connection(dconn);
+
+  remove_from_pool(dconn);
   // dconn was deleted
 }
 } // namespace
@@ -545,7 +619,9 @@ void HttpDownstreamConnection::detach_downstream(Downstream *downstream) {
   ev_set_cb(&conn_.rev, idle_readcb);
   ioctrl_.force_resume_read();
 
-  conn_.rt.repeat = get_config()->conn.downstream.timeout.idle_read;
+  auto &downstreamconf = *worker_->get_downstream_config();
+
+  conn_.rt.repeat = downstreamconf.timeout.idle_read;
   ev_set_cb(&conn_.rt, idle_timeoutcb);
   ev_timer_again(conn_.loop, &conn_.rt);
 
@@ -559,8 +635,10 @@ void HttpDownstreamConnection::pause_read(IOCtrlReason reason) {
 
 int HttpDownstreamConnection::resume_read(IOCtrlReason reason,
                                           size_t consumed) {
+  auto &downstreamconf = *worker_->get_downstream_config();
+
   if (downstream_->get_response_buf()->rleft() <=
-      get_config()->conn.downstream.request_buffer_size / 2) {
+      downstreamconf.request_buffer_size / 2) {
     ioctrl_.resume_read(reason);
   }
 
@@ -594,6 +672,13 @@ int htp_hdrs_completecb(http_parser *htp) {
   resp.http_status = htp->status_code;
   resp.http_major = htp->http_major;
   resp.http_minor = htp->http_minor;
+
+  if (resp.http_major > 1) {
+    // Normalize HTTP version, since we use http_major == 2 specially
+    // in Downstream::expect_response_trailer().
+    resp.http_major = 1;
+    resp.http_minor = 1;
+  }
 
   if (resp.fs.parse_content_length() != 0) {
     downstream->set_response_state(Downstream::MSG_BAD_HEADER);
@@ -630,7 +715,10 @@ int htp_hdrs_completecb(http_parser *htp) {
     resp.connection_close = true;
     // transfer-encoding not applied to upgraded connection
     downstream->set_chunked_response(false);
+  } else if (!downstream->expect_response_body()) {
+    downstream->set_chunked_response(false);
   }
+
   if (upstream->on_downstream_header_complete(downstream) != 0) {
     return -1;
   }
@@ -647,7 +735,6 @@ int htp_hdrs_completecb(http_parser *htp) {
     }
   }
 
-  auto status = resp.http_status;
   // Ignore the response body. HEAD response may contain
   // Content-Length or Transfer-Encoding: chunked.  Some server send
   // 304 status code with nonzero Content-Length, but without response
@@ -656,15 +743,7 @@ int htp_hdrs_completecb(http_parser *htp) {
 
   // TODO It seems that the cases other than HEAD are handled by
   // http-parser.  Need test.
-  
-  // ADDITIONAL
-  std::cout << "Done with Request header." << std::endl;
-  // END ADDITIONAL
-
-  return req.method == HTTP_HEAD || (100 <= status && status <= 199) ||
-                 status == 204 || status == 304
-             ? 1
-             : 0;
+  return !http2::expect_response_body(req.method, resp.http_status);
 }
 } // namespace
 
@@ -817,7 +896,6 @@ http_parser_settings htp_hooks = {
 } // namespace
 
 int HttpDownstreamConnection::read_clear() {
-  ev_timer_again(conn_.loop, &conn_.rt);
   std::array<uint8_t, 16_k> buf;
   int rv;
 
@@ -843,8 +921,6 @@ int HttpDownstreamConnection::read_clear() {
 }
 
 int HttpDownstreamConnection::write_clear() {
-  ev_timer_again(conn_.loop, &conn_.rt);
-
   auto upstream = downstream_->get_upstream();
   auto input = downstream_->get_request_buf();
 
@@ -890,6 +966,8 @@ int HttpDownstreamConnection::tls_handshake() {
   }
 
   if (rv < 0) {
+    downstream_failure(addr_);
+
     return rv;
   }
 
@@ -899,15 +977,25 @@ int HttpDownstreamConnection::tls_handshake() {
 
   if (!get_config()->tls.insecure &&
       ssl::check_cert(conn_.tls.ssl, addr_) != 0) {
+    downstream_failure(addr_);
+
     return -1;
   }
 
   if (!SSL_session_reused(conn_.tls.ssl)) {
     auto session = SSL_get0_session(conn_.tls.ssl);
     if (session) {
-      ssl::try_cache_tls_session(addr_, session, ev_now(conn_.loop));
+      ssl::try_cache_tls_session(addr_->tls_session_cache, addr_->addr, session,
+                                 ev_now(conn_.loop));
     }
   }
+
+  auto &connect_blocker = addr_->connect_blocker;
+
+  connect_blocker->on_success();
+
+  ev_set_cb(&conn_.rt, timeoutcb);
+  ev_set_cb(&conn_.wt, timeoutcb);
 
   do_read_ = &HttpDownstreamConnection::read_tls;
   do_write_ = &HttpDownstreamConnection::write_tls;
@@ -920,7 +1008,6 @@ int HttpDownstreamConnection::tls_handshake() {
 int HttpDownstreamConnection::read_tls() {
   ERR_clear_error();
 
-  ev_timer_again(conn_.loop, &conn_.rt);
   std::array<uint8_t, 16_k> buf;
   int rv;
 
@@ -947,8 +1034,6 @@ int HttpDownstreamConnection::read_tls() {
 
 int HttpDownstreamConnection::write_tls() {
   ERR_clear_error();
-
-  ev_timer_again(conn_.loop, &conn_.rt);
 
   auto upstream = downstream_->get_upstream();
   auto input = downstream_->get_request_buf();
@@ -1064,8 +1149,6 @@ int HttpDownstreamConnection::connected() {
 
     downstream_failure(addr_);
 
-    downstream_->set_request_state(Downstream::CONNECT_FAIL);
-
     return -1;
   }
 
@@ -1073,11 +1156,11 @@ int HttpDownstreamConnection::connected() {
     DCLOG(INFO, this) << "Connected to downstream host";
   }
 
-  connect_blocker->on_success();
-
   conn_.rlimit.startw();
 
   ev_set_cb(&conn_.wev, writecb);
+
+  do_signal_write_ = &HttpDownstreamConnection::actual_signal_write;
 
   if (conn_.tls.ssl) {
     do_read_ = &HttpDownstreamConnection::tls_handshake;
@@ -1085,6 +1168,11 @@ int HttpDownstreamConnection::connected() {
 
     return 0;
   }
+
+  connect_blocker->on_success();
+
+  ev_set_cb(&conn_.rt, timeoutcb);
+  ev_set_cb(&conn_.wt, timeoutcb);
 
   do_read_ = &HttpDownstreamConnection::read_clear;
   do_write_ = &HttpDownstreamConnection::write_clear;
@@ -1098,15 +1186,22 @@ int HttpDownstreamConnection::on_write() { return do_write_(*this); }
 
 void HttpDownstreamConnection::on_upstream_change(Upstream *upstream) {}
 
-void HttpDownstreamConnection::signal_write() {
+void HttpDownstreamConnection::signal_write() { do_signal_write_(*this); }
+
+int HttpDownstreamConnection::actual_signal_write() {
   ev_feed_event(conn_.loop, &conn_.wev, EV_WRITE);
+  return 0;
 }
 
 int HttpDownstreamConnection::noop() { return 0; }
 
 DownstreamAddrGroup *
 HttpDownstreamConnection::get_downstream_addr_group() const {
-  return group_;
+  return group_.get();
 }
+
+DownstreamAddr *HttpDownstreamConnection::get_addr() const { return addr_; }
+
+bool HttpDownstreamConnection::poolable() const { return !group_->retired; }
 
 } // namespace shrpx

@@ -856,10 +856,9 @@ int Http2Handler::connection_made() {
   }
 
   if (config->connection_window_bits != -1) {
-    r = nghttp2_submit_window_update(
+    r = nghttp2_session_set_local_window_size(
         session_, NGHTTP2_FLAG_NONE, 0,
-        (1 << config->connection_window_bits) - 1 -
-            NGHTTP2_INITIAL_CONNECTION_WINDOW_SIZE);
+        (1 << config->connection_window_bits) - 1);
     if (r != 0) {
       return r;
     }
@@ -1121,8 +1120,12 @@ void prepare_status_response(Stream *stream, Http2Handler *hd, int status) {
   data_prd.read_callback = file_read_callback;
 
   HeaderRefs headers;
+  headers.reserve(2);
   headers.emplace_back(StringRef::from_lit("content-type"),
                        StringRef::from_lit("text/html; charset=UTF-8"));
+  headers.emplace_back(
+      StringRef::from_lit("content-length"),
+      util::make_string_ref_uint(stream->balloc, file_ent->length));
   hd->submit_response(StringRef{status_page->status}, stream->stream_id,
                       headers, &data_prd);
 }
@@ -1285,7 +1288,7 @@ void prepare_response(Stream *stream, Http2Handler *hd,
     p = std::copy(std::begin(htdocs), std::end(htdocs), p);
     p = std::copy(std::begin(path), std::end(path), p);
     if (trailing_slash) {
-      p = std::copy(std::begin(DEFAULT_HTML), std::end(DEFAULT_HTML), p);
+      std::copy(std::begin(DEFAULT_HTML), std::end(DEFAULT_HTML), p);
     }
   }
 
@@ -1793,6 +1796,16 @@ void run_worker(Worker *worker) {
 }
 } // namespace
 
+namespace {
+int get_ev_loop_flags() {
+  if (ev_supported_backends() & ~ev_recommended_backends() & EVBACKEND_KQUEUE) {
+    return ev_recommended_backends() | EVBACKEND_KQUEUE;
+  }
+
+  return 0;
+}
+} // namespace
+
 class AcceptHandler {
 public:
   AcceptHandler(HttpServer *sv, Sessions *sessions, const Config *config)
@@ -1805,7 +1818,7 @@ public:
         std::cerr << "spawning thread #" << i << std::endl;
       }
       auto worker = make_unique<Worker>();
-      auto loop = ev_loop_new(0);
+      auto loop = ev_loop_new(get_ev_loop_flags());
       worker->sessions =
           make_unique<Sessions>(sv, loop, config_, sessions_->get_ssl_ctx());
       ev_async_init(&worker->w, worker_acceptcb);

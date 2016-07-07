@@ -129,6 +129,11 @@ OPTIONS = [
     "backend-tls",
     "backend-connections-per-host",
     "error-page",
+    "no-kqueue",
+    "frontend-http2-settings-timeout",
+    "backend-http2-settings-timeout",
+    "api-max-request-body",
+    "backend-max-backoff",
 ]
 
 LOGVARS = [

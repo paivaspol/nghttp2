@@ -103,6 +103,14 @@ void thread_join_async_cb(struct ev_loop *loop, ev_async *w, int revent) {
 } // namespace
 
 namespace {
+void serial_event_async_cb(struct ev_loop *loop, ev_async *w, int revent) {
+  auto h = static_cast<ConnectionHandler *>(w->data);
+
+  h->handle_serial_event();
+}
+} // namespace
+
+namespace {
 std::random_device rd;
 } // namespace
 
@@ -112,7 +120,7 @@ ConnectionHandler::ConnectionHandler(struct ev_loop *loop)
       loop_(loop),
       tls_ticket_key_memcached_get_retry_count_(0),
       tls_ticket_key_memcached_fail_count_(0),
-      worker_round_robin_cnt_(0),
+      worker_round_robin_cnt_(get_config()->api.enabled ? 1 : 0),
       graceful_shutdown_(false) {
   ev_timer_init(&disable_acceptor_timer_, acceptor_disable_cb, 0., 0.);
   disable_acceptor_timer_.data = this;
@@ -125,6 +133,11 @@ ConnectionHandler::ConnectionHandler(struct ev_loop *loop)
 
   ev_async_init(&thread_join_asyncev_, thread_join_async_cb);
 
+  ev_async_init(&serial_event_asyncev_, serial_event_async_cb);
+  serial_event_asyncev_.data = this;
+
+  ev_async_start(loop_, &serial_event_asyncev_);
+
   ev_child_init(&ocsp_.chldev, ocsp_chld_cb, 0, 0);
   ocsp_.chldev.data = this;
 
@@ -136,6 +149,7 @@ ConnectionHandler::ConnectionHandler(struct ev_loop *loop)
 
 ConnectionHandler::~ConnectionHandler() {
   ev_child_stop(loop_, &ocsp_.chldev);
+  ev_async_stop(loop_, &serial_event_asyncev_);
   ev_async_stop(loop_, &thread_join_asyncev_);
   ev_io_stop(loop_, &ocsp_.rev);
   ev_timer_stop(loop_, &ocsp_timer_);
@@ -175,11 +189,23 @@ void ConnectionHandler::worker_reopen_log_files() {
   }
 }
 
+void ConnectionHandler::worker_replace_downstream(
+    std::shared_ptr<DownstreamConfig> downstreamconf) {
+  WorkerEvent wev{};
+
+  wev.type = REPLACE_DOWNSTREAM;
+  wev.downstreamconf = std::move(downstreamconf);
+
+  for (auto &worker : workers_) {
+    worker->send(wev);
+  }
+}
+
 int ConnectionHandler::create_single_worker() {
-  auto cert_tree = ssl::create_cert_lookup_tree();
-  auto sv_ssl_ctx = ssl::setup_server_ssl_context(all_ssl_ctx_, cert_tree
+  cert_tree_ = ssl::create_cert_lookup_tree();
+  auto sv_ssl_ctx = ssl::setup_server_ssl_context(all_ssl_ctx_, cert_tree_.get()
 #ifdef HAVE_NEVERBLEED
-                                                  ,
+                                                                    ,
                                                   nb_.get()
 #endif // HAVE_NEVERBLEED
                                                       );
@@ -207,9 +233,9 @@ int ConnectionHandler::create_single_worker() {
     all_ssl_ctx_.push_back(session_cache_ssl_ctx);
   }
 
-  single_worker_ =
-      make_unique<Worker>(loop_, sv_ssl_ctx, cl_ssl_ctx, session_cache_ssl_ctx,
-                          cert_tree, ticket_keys_);
+  single_worker_ = make_unique<Worker>(
+      loop_, sv_ssl_ctx, cl_ssl_ctx, session_cache_ssl_ctx, cert_tree_.get(),
+      ticket_keys_, this, get_config()->conn.downstream);
 #ifdef HAVE_MRUBY
   if (single_worker_->create_mruby_context() != 0) {
     return -1;
@@ -223,10 +249,10 @@ int ConnectionHandler::create_worker_thread(size_t num) {
 #ifndef NOTHREADS
   assert(workers_.size() == 0);
 
-  auto cert_tree = ssl::create_cert_lookup_tree();
-  auto sv_ssl_ctx = ssl::setup_server_ssl_context(all_ssl_ctx_, cert_tree
+  cert_tree_ = ssl::create_cert_lookup_tree();
+  auto sv_ssl_ctx = ssl::setup_server_ssl_context(all_ssl_ctx_, cert_tree_.get()
 #ifdef HAVE_NEVERBLEED
-                                                  ,
+                                                                    ,
                                                   nb_.get()
 #endif // HAVE_NEVERBLEED
                                                       );
@@ -242,9 +268,15 @@ int ConnectionHandler::create_worker_thread(size_t num) {
 
   auto &tlsconf = get_config()->tls;
   auto &memcachedconf = get_config()->tls.session_cache.memcached;
+  auto &apiconf = get_config()->api;
+
+  // We have dedicated worker for API request processing.
+  if (apiconf.enabled) {
+    ++num;
+  }
 
   for (size_t i = 0; i < num; ++i) {
-    auto loop = ev_loop_new(0);
+    auto loop = ev_loop_new(get_config()->ev_loop_flags);
 
     SSL_CTX *session_cache_ssl_ctx = nullptr;
     if (memcachedconf.tls) {
@@ -256,9 +288,9 @@ int ConnectionHandler::create_worker_thread(size_t num) {
           StringRef{memcachedconf.private_key_file}, nullptr);
       all_ssl_ctx_.push_back(session_cache_ssl_ctx);
     }
-    auto worker =
-        make_unique<Worker>(loop, sv_ssl_ctx, cl_ssl_ctx, session_cache_ssl_ctx,
-                            cert_tree, ticket_keys_);
+    auto worker = make_unique<Worker>(
+        loop, sv_ssl_ctx, cl_ssl_ctx, session_cache_ssl_ctx, cert_tree_.get(),
+        ticket_keys_, this, get_config()->conn.downstream);
 #ifdef HAVE_MRUBY
     if (worker->create_mruby_context() != 0) {
       return -1;
@@ -274,6 +306,7 @@ int ConnectionHandler::create_worker_thread(size_t num) {
   for (auto &worker : workers_) {
     worker->run_async();
   }
+
 #endif // NOTHREADS
 
   return 0;
@@ -358,11 +391,32 @@ int ConnectionHandler::handle_connection(int fd, sockaddr *addr, int addrlen,
     return 0;
   }
 
-  size_t idx = worker_round_robin_cnt_ % workers_.size();
-  if (LOG_ENABLED(INFO)) {
-    LOG(INFO) << "Dispatch connection to worker #" << idx;
+  Worker *worker;
+
+  if (faddr->alt_mode == ALTMODE_API) {
+    worker = workers_[0].get();
+
+    if (LOG_ENABLED(INFO)) {
+      LOG(INFO) << "Dispatch connection to API worker #0";
+    }
+  } else {
+    worker = workers_[worker_round_robin_cnt_].get();
+
+    if (LOG_ENABLED(INFO)) {
+      LOG(INFO) << "Dispatch connection to worker #" << worker_round_robin_cnt_;
+    }
+
+    if (++worker_round_robin_cnt_ == workers_.size()) {
+      auto &apiconf = get_config()->api;
+
+      if (apiconf.enabled) {
+        worker_round_robin_cnt_ = 1;
+      } else {
+        worker_round_robin_cnt_ = 0;
+      }
+    }
   }
-  ++worker_round_robin_cnt_;
+
   WorkerEvent wev{};
   wev.type = NEW_CONNECTION;
   wev.client_fd = fd;
@@ -370,7 +424,7 @@ int ConnectionHandler::handle_connection(int fd, sockaddr *addr, int addrlen,
   wev.client_addrlen = addrlen;
   wev.faddr = faddr;
 
-  workers_[idx]->send(wev);
+  worker->send(wev);
 
   return 0;
 }
@@ -464,7 +518,6 @@ int ConnectionHandler::start_ocsp_update(const char *cert_file) {
       const_cast<char *>(
           get_config()->tls.ocsp.fetch_ocsp_response_file.c_str()),
       const_cast<char *>(cert_file), nullptr};
-  char *const envp[] = {nullptr};
 
 #ifdef O_CLOEXEC
   if (pipe2(pfd, O_CLOEXEC) == -1) {
@@ -515,7 +568,7 @@ int ConnectionHandler::start_ocsp_update(const char *cert_file) {
     dup2(pfd[1], 1);
     close(pfd[0]);
 
-    rv = execve(argv[0], argv, envp);
+    rv = execv(argv[0], argv);
     if (rv == -1) {
       auto error = errno;
       LOG(ERROR) << "Could not execute ocsp query command: " << argv[0]
@@ -782,5 +835,51 @@ void ConnectionHandler::set_neverbleed(std::unique_ptr<neverbleed_t> nb) {
 neverbleed_t *ConnectionHandler::get_neverbleed() const { return nb_.get(); }
 
 #endif // HAVE_NEVERBLEED
+
+void ConnectionHandler::handle_serial_event() {
+  std::vector<SerialEvent> q;
+  {
+    std::lock_guard<std::mutex> g(serial_event_mu_);
+    q.swap(serial_events_);
+  }
+
+  for (auto &sev : q) {
+    switch (sev.type) {
+    case SEV_REPLACE_DOWNSTREAM:
+      // Mmake sure that none of worker uses
+      // get_config()->conn.downstream
+      mod_config()->conn.downstream = sev.downstreamconf;
+
+      if (single_worker_) {
+        single_worker_->replace_downstream_config(sev.downstreamconf);
+
+        break;
+      }
+
+      worker_replace_downstream(sev.downstreamconf);
+
+      break;
+    }
+  }
+}
+
+void ConnectionHandler::send_replace_downstream(
+    const std::shared_ptr<DownstreamConfig> &downstreamconf) {
+  send_serial_event(SerialEvent(SEV_REPLACE_DOWNSTREAM, downstreamconf));
+}
+
+void ConnectionHandler::send_serial_event(SerialEvent ev) {
+  {
+    std::lock_guard<std::mutex> g(serial_event_mu_);
+
+    serial_events_.push_back(std::move(ev));
+  }
+
+  ev_async_send(loop_, &serial_event_asyncev_);
+}
+
+SSL_CTX *ConnectionHandler::get_ssl_ctx(size_t idx) const {
+  return all_ssl_ctx_[idx];
+}
 
 } // namespace shrpx
