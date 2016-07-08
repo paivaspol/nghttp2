@@ -3633,6 +3633,13 @@ nghttp2_submit_response(nghttp2_session *session, int32_t stream_id,
                         const nghttp2_nv *nva, size_t nvlen,
                         const nghttp2_data_provider *data_prd);
 
+NGHTTP2_EXTERN int
+nghttp2_submit_response_with_dependencies(
+                        nghttp2_session *session, int32_t stream_id,
+                        const nghttp2_nv *nva, size_t nvlen,
+                        const nghttp2_data_provider *data_prd,
+                        const nghttp2_data_provider *dependencies_prd);
+
 /**
  * @function
  *

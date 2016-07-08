@@ -840,7 +840,7 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
  */
 int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
                               size_t datamax, nghttp2_frame *frame,
-                              nghttp2_data_aux_data *aux_data,
+                              ext_dependency_aux_data *aux_data,
                               nghttp2_stream *stream);
 
 /*

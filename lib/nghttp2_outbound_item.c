@@ -86,6 +86,9 @@ void nghttp2_outbound_item_free(nghttp2_outbound_item *item, nghttp2_mem *mem) {
     case NGHTTP2_ALTSVC:
       nghttp2_frame_altsvc_free(&frame->ext, mem);
       break;
+    case EXT_DEPENDENCY:
+      ext_frame_dependency_free(&frame->dependency);
+      break;
     default:
       assert(0);
       break;

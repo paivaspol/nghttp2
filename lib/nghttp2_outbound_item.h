@@ -37,6 +37,9 @@
 typedef struct {
   nghttp2_data_provider data_prd;
   void *stream_user_data;
+
+  nghttp2_data_provider dependencies_prd;
+
   /* error code when request HEADERS is canceled by RST_STREAM while
      it is in queue. */
   uint32_t error_code;
@@ -87,6 +90,17 @@ typedef struct {
   uint8_t flags;
 } nghttp2_goaway_aux_data;
 
+typedef struct {
+  nghttp2_data_provider dependency_prd;
+  nghttp2_data_provider data_prd;
+
+  /**
+   * The flag to indicate whether EOF was reached or not. Initially
+   * |eof| is 0. It becomes 1 after all data were read.
+   */
+  uint8_t eof;
+} ext_dependency_aux_data;
+
 /* struct used for extension frame */
 typedef struct {
   /* nonzero if this extension frame is serialized by library
@@ -99,6 +113,7 @@ typedef union {
   nghttp2_data_aux_data data;
   nghttp2_headers_aux_data headers;
   nghttp2_goaway_aux_data goaway;
+  ext_dependency_aux_data dependency;
   nghttp2_ext_aux_data ext;
 } nghttp2_aux_data;
 
