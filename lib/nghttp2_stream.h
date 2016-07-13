@@ -233,6 +233,8 @@ struct nghttp2_stream {
   /* This flag is used to indicate whether the stream is expecting
      additional dependencies from the dependency reader. */
   uint8_t still_have_dependencies;
+
+  uint8_t submitted_data;
   // END ADDITIONAL
 };
 

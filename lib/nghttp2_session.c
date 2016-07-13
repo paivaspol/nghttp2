@@ -2277,7 +2277,6 @@ static int session_prep_frame(nghttp2_session *session,
       if (stream) {
         int rv2;
         rv2 = nghttp2_stream_detach_item(stream);
-
         if (nghttp2_is_fatal(rv2)) {
           return rv2;
         }
@@ -2312,7 +2311,7 @@ static int session_prep_frame(nghttp2_session *session,
     rv = ext_session_pack_dependency(session, &session->aob.framebufs,
                                     next_readmax, frame, &item->aux_data.dependency,
                                     stream);
-    printf("[nghttp2_session] (2)\n");
+    printf("[nghttp2_session] after ext_session_pack_dependency (2)\n");
 
     if (rv == NGHTTP2_ERR_DEFERRED) {
       rv = nghttp2_stream_defer_item(stream, NGHTTP2_STREAM_FLAG_DEFERRED_USER);
@@ -2350,11 +2349,11 @@ static int session_prep_frame(nghttp2_session *session,
 
       return rv;
     }
-    return 0;
+    return nghttp2_stream_detach_item(stream);
   }
   // END ADDITIONAL
   else {
-    // printf("[nghttp2_session] data\n");
+    printf("[nghttp2_session] data\n");
     size_t next_readmax;
     nghttp2_stream *stream;
 
@@ -2751,9 +2750,17 @@ static int session_after_frame_sent1(nghttp2_session *session) {
       break;
     }
     case EXT_DEPENDENCY: {
-      nghttp2_headers_aux_data *aux_data;
+      ext_dependency_aux_data *aux_data;
       aux_data = &item->aux_data.dependency;
-      if (aux_data->data_prd.read_callback) {
+      if (!aux_data->eof) {
+          rv = nghttp2_submit_dependency_with_data(session, NGHTTP2_FLAG_NONE, 
+                                         frame->hd.stream_id,
+                                         &aux_data->data_prd,
+                                         &aux_data->dependency_prd);
+          if (nghttp2_is_fatal(rv)) {
+            return rv;
+          }
+      } else if (aux_data->data_prd.read_callback) {
           rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
                                    frame->hd.stream_id, &aux_data->data_prd);
           if (nghttp2_is_fatal(rv)) {
@@ -2801,7 +2808,7 @@ static int session_after_frame_sent1(nghttp2_session *session) {
       break;
     }
     case NGHTTP2_RST_STREAM:
-      printf("[nghttp2_session] Received RST_STREAM on stream %" PRIu32 "\n");
+      printf("[nghttp2_session] Received RST_STREAM on stream %" PRIu32 "\n", frame->hd.stream_id);
       rv = nghttp2_session_close_stream(session, frame->hd.stream_id,
                                         frame->rst_stream.error_code);
       if (nghttp2_is_fatal(rv)) {
@@ -3404,7 +3411,7 @@ static int session_call_on_begin_frame(nghttp2_session *session,
                                        const nghttp2_frame_hd *hd) {
   int rv;
 
-  printf("flag: %" PRId8 "\n", hd->flags);
+  printf("[session call on begin frame] flag: %" PRId8 "\n", hd->flags);
 
   if (session->callbacks.on_begin_frame_callback) {
 
@@ -6999,7 +7006,7 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
 
   buf = &bufs->cur->buf;
 
-  printf("[nghttp2_session] here (1)\n");
+  // printf("[nghttp2_session] here (1)\n");
 
   if (session->callbacks.read_length_callback) {
     printf("[nghttp2_session] pack_dependency (2)\n");
@@ -7045,7 +7052,7 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
     datamax = (size_t)payloadlen;
   }
 
-  printf("[nghttp2_session] here (2)\n");
+  // printf("[nghttp2_session] here (2)\n");
 
   /* Pack the dependencies. */
   /* Current max DATA length is less then buffer chunk size */
@@ -7069,12 +7076,12 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
 
   data_flags = NGHTTP2_DATA_FLAG_NONE;
 
-  printf("[nghttp2_session] here (3)\n");
+  // printf("[nghttp2_session] here (3)\n");
   payloadlen = aux_data->dependency_prd.read_callback(
       session, frame->hd.stream_id, buf->last, datamax, &data_flags,
       &aux_data->dependency_prd.source, session->user_data);
   buf->last += payloadlen;
-  printf("[nghttp2_session] here (4)\n");
+  // printf("[nghttp2_session] here (4)\n");
 
   // printf("[nghttp2_session.c] pack dependency END_STREAM %" PRIu8 "\n", aux_data->flags);
   // if ((aux_data->flags & NGHTTP2_FLAG_END_STREAM) &&
@@ -7082,24 +7089,27 @@ int ext_session_pack_dependency(nghttp2_session *session, nghttp2_bufs *bufs,
   //   printf("[nghttp2_session.c] setting end stream for dependency frame.\n");
   //   frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
   // }
+  if (data_flags & NGHTTP2_DATA_FLAG_EOF) {
+    aux_data->eof = 1;
+  }
   
   payloadlen += 4 + 4;
   frame->hd.length = (size_t) payloadlen;
-  printf("[nghttp2_session] here (4)\n");
+  // printf("[nghttp2_session] here (4)\n");
 
   nghttp2_frame_pack_frame_hd(buf->pos, &frame->hd);
-  printf("[nghttp2_session] here (5)\n");
+  // printf("[nghttp2_session] here (5)\n");
 
   if (payloadlen < 0 || datamax < (size_t)payloadlen) {
     /* This is the error code when callback is failed. */
     return NGHTTP2_ERR_CALLBACK_FAILURE;
   }
-  printf("[nghttp2_session] here (6)\n");
+  // printf("[nghttp2_session] here (6)\n");
 
-  reschedule_stream(stream);
+  // reschedule_stream(stream);
 
   // printf("num deps: %u stream id: %u network(num_dep): %u network(stream): %u\n", frame->dependency.num_dependencies, frame->dependency.dependency_stream_id, htonl(frame->dependency.num_dependencies), htonl(frame->dependency.dependency_stream_id));
-  printf("[nghttp2_session] returned\n");
+  printf("[nghttp2_session] Packed dependency\n");
   return 0;
 }
 
@@ -7117,6 +7127,8 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
   assert(bufs->head == bufs->cur);
 
   buf = &bufs->cur->buf;
+
+  printf("[nghttp2_session] packing data\n");
 
   if (session->callbacks.read_length_callback) {
 
@@ -7199,11 +7211,11 @@ int nghttp2_session_pack_data(nghttp2_session *session, nghttp2_bufs *bufs,
         nghttp2_stream_set_done_with_last_data_byte(stream, 1);
         printf("[nghttp2_session.c] Done with last byte\n");
         // ADDITIONAL
-        if (stream->still_have_dependencies == 0) {
-        // END ADDITIONAL
-          printf("[nghttp2_session.c] Sending FLAG_END_STREAM for stream: %" PRId32 "\n", frame->hd.stream_id);
-          frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
-    }
+        // if (stream->still_have_dependencies == 0) {
+        // // END ADDITIONAL
+        //   printf("[nghttp2_session.c] Sending FLAG_END_STREAM for stream: %" PRId32 "\n", frame->hd.stream_id);
+        // }
+        frame->hd.flags |= NGHTTP2_FLAG_END_STREAM;
   }
 
   if (data_flags & NGHTTP2_DATA_FLAG_NO_COPY) {

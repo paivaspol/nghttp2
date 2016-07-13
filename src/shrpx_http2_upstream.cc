@@ -1574,21 +1574,29 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
     data_prdptr = nullptr;
   }
 
-  nghttp2_data_provider dependency_data_provider = 
-    dep_reader_.GetDependenciesDataProvider(construct_url(req));
-  nghttp2_data_provider *dependencies_prdptr = &dependency_data_provider;
+  auto stream_id = downstream->get_stream_id();
+  auto url = construct_url(req);
+  if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) &&
+      dep_reader_.still_have_dependencies(url)) {
+    nghttp2_data_provider dependency_data_provider = 
+      dep_reader_.GetDependenciesDataProvider(construct_url(req));
+    nghttp2_data_provider *dependencies_prdptr = &dependency_data_provider;
 
-  rv = nghttp2_submit_response_with_dependencies(
-                               session_, downstream->get_stream_id(),
-                               nva.data(), nva.size(), data_prdptr,
-                               dependencies_prdptr);
+    rv = nghttp2_submit_response_with_dependencies(
+                                 session_, downstream->get_stream_id(),
+                                 nva.data(), nva.size(), data_prdptr,
+                                 dependencies_prdptr);
+  } else {
+    rv = nghttp2_submit_response(session_, downstream->get_stream_id(),
+                                 nva.data(), nva.size(), data_prdptr);
+
+  }
   if (rv != 0) {
     ULOG(FATAL, this) << "nghttp2_submit_response() failed";
     return -1;
   }
 
   // ADDITIONAL
-  // auto stream_id = downstream->get_stream_id();
   // std::cout << "[Http2Upstream.cc] submitted response for " << req.path << " with status: " << resp.http_status << " on stream: " << stream_id << " requesting deps: " << nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) << std::endl;
   // if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id)) {
   //   if (!dep_reader_.StartReturningDependencies(construct_url(req))) {

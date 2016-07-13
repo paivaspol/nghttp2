@@ -1012,6 +1012,10 @@ int32_t nghttp2_stream_get_stream_id(nghttp2_stream *stream) {
 }
 
 // ADDITIONAL
+void nghttp2_stream_submitted_data(nghttp2_stream *stream) {
+  stream->submitted_data = 1;
+}
+
 void nghttp2_stream_set_still_have_dependencies(nghttp2_stream *stream,
                                                 uint8_t still_have_dependencies) {
   stream->still_have_dependencies = still_have_dependencies;

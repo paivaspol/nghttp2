@@ -63,16 +63,21 @@ bool DependencyReader::StartReturningDependencies(const std::string url) {
 
 nghttp2_data_provider DependencyReader::GetDependenciesDataProvider(
     const std::string url) {
-  assert(outstanding_dependencies_.count(url) > 0);
+  // assert(outstanding_dependencies_.count(url) > 0);
 
-  std::cout << "[dep_reader.cc] Creating data provider." << std::endl;
-  nghttp2_data_provider *provider = new nghttp2_data_provider();
-  std::deque<std::pair<std::string, std::string>> *dependencies = 
-    new std::deque<std::pair<std::string, std::string>>(outstanding_dependencies_[url]);
-  provider->source.ptr = reinterpret_cast<void *>(dependencies);
-  provider->read_callback = dependency_read_callback;
-  // outstanding_dependencies_.erase(url);
-  return *provider;
+  if (outstanding_dependencies_.count(url) > 0) {
+    nghttp2_data_provider *provider = new nghttp2_data_provider();
+    std::cout << "[dep_reader.cc] Creating data provider." << std::endl;
+    std::deque<std::pair<std::string, std::string>> *dependencies = 
+      new std::deque<std::pair<std::string, std::string>>(outstanding_dependencies_[url]);
+    provider->source.ptr = reinterpret_cast<void *>(dependencies);
+    provider->read_callback = dependency_read_callback;
+    // outstanding_dependencies_.erase(url);
+    return *provider;
+  } else {
+    nghttp2_data_provider *provider = NULL;
+    return *provider;
+  }
 }
 
 uint32_t DependencyReader::num_dependencies_remaining(const std::string url) {
@@ -138,7 +143,8 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
       result.insert(std::make_pair(origin, 
             std::deque<std::pair<std::string, std::string>>()));
     }
-    result[origin].push_back(std::make_pair(parent, dependency));
+    if (dependency != url)
+      result[origin].push_back(std::make_pair(parent, dependency));
   }
   return result;
 }
@@ -192,6 +198,11 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
   /* Pack result string to uint8_t format. */
   std::string result = dependency.first + "\n" + dependency.second;
   std::memcpy(buf, result.c_str(), result.length() + 1);
+  // Properly handle the flag.
+  if (dependencies->size() == 0) {
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
+  }
   // std::cout << "before returning" << std::endl;
   return parent_length + dependency_length + 2; // Account for the NULL terminal.
 }
