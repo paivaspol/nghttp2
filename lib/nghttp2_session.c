@@ -911,7 +911,7 @@ int nghttp2_session_add_item(nghttp2_session *session,
       // }
       
       /* Add the item to the outbound queue and set the item |queued| property to true */
-      nghttp2_outbound_queue_push(&session->ob_reg, item);
+      nghttp2_outbound_queue_push(&session->ob_urgent, item);
       item->queued = 1;
       break;
     }
@@ -2048,6 +2048,7 @@ static int session_prep_frame(nghttp2_session *session,
             frame->headers.cat = NGHTTP2_HCAT_PUSH_RESPONSE;
 
             if (aux_data->stream_user_data) {
+              printf("[session] set stream->stream_user_data\n");
               stream->stream_user_data = aux_data->stream_user_data;
             }
           }
@@ -2699,6 +2700,7 @@ static int session_after_frame_sent1(nghttp2_session *session) {
         aux_data = &item->aux_data.headers;
         if (aux_data->data_prd.read_callback) {
           /* nghttp2_submit_data() makes a copy of aux_data->data_prd */
+          printf("[session] submit\n");
           rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
                                    frame->hd.stream_id, &aux_data->data_prd);
           if (nghttp2_is_fatal(rv)) {
@@ -2761,8 +2763,8 @@ static int session_after_frame_sent1(nghttp2_session *session) {
             return rv;
           }
       } else if (aux_data->data_prd.read_callback) {
-          rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
-                                   frame->hd.stream_id, &aux_data->data_prd);
+          // rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
+          //                          frame->hd.stream_id, &aux_data->data_prd);
           if (nghttp2_is_fatal(rv)) {
             return rv;
           }
@@ -7718,6 +7720,7 @@ int nghttp2_session_should_resolve_dependency_for_stream(nghttp2_session *sessio
     return 0;
   }
   if (!stream->still_have_dependencies) {
+    printf("[session] still have dependencies\n");
     return 0;
   }
   return 1;

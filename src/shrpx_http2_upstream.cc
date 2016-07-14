@@ -1576,6 +1576,7 @@ int Http2Upstream::on_downstream_header_complete(Downstream *downstream) {
 
   auto stream_id = downstream->get_stream_id();
   auto url = construct_url(req);
+  std::cout << "[upstream] should_resolve: " << nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) << " still have dependencies: " << dep_reader_.still_have_dependencies(url) << " url: " << url << std::endl;
   if (nghttp2_session_should_resolve_dependency_for_stream(session_, stream_id) &&
       dep_reader_.still_have_dependencies(url)) {
     nghttp2_data_provider dependency_data_provider = 

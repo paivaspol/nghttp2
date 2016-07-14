@@ -31,15 +31,16 @@ void DependencyReader::Start(const std::string website) {
 }
 
 bool DependencyReader::StartReturningDependencies(const std::string url) {
-  std::cout << "[dep_reader.cc] Start Returning Dependencies for url: " << url << std::endl;
-  if (outstanding_dependencies_to_stream_id_.count(url) == 0) {
+  std::string escaped_url = RemoveTrailingSlash(url);
+  std::cout << "[dep_reader.cc] Start Returning Dependencies for url: " << escaped_url << std::endl;
+  if (outstanding_dependencies_to_stream_id_.count(escaped_url) == 0) {
     // The URL doesn't have any dependent resources.
     return false;
   }
 
-  can_start_notifying_upstream_[url] = true;
+  can_start_notifying_upstream_[escaped_url] = true;
   if (!dependencies_.empty()) {
-    on_new_dependency_callback_(url, outstanding_dependencies_to_stream_id_[url]);
+    on_new_dependency_callback_(escaped_url, outstanding_dependencies_to_stream_id_[url]);
   }
   return true;
 }
@@ -65,11 +66,12 @@ nghttp2_data_provider DependencyReader::GetDependenciesDataProvider(
     const std::string url) {
   // assert(outstanding_dependencies_.count(url) > 0);
 
-  if (outstanding_dependencies_.count(url) > 0) {
+  std::string escaped_url = RemoveTrailingSlash(url);
+  if (outstanding_dependencies_.count(escaped_url) > 0) {
     nghttp2_data_provider *provider = new nghttp2_data_provider();
     std::cout << "[dep_reader.cc] Creating data provider." << std::endl;
     std::deque<std::pair<std::string, std::string>> *dependencies = 
-      new std::deque<std::pair<std::string, std::string>>(outstanding_dependencies_[url]);
+      new std::deque<std::pair<std::string, std::string>>(outstanding_dependencies_[escaped_url]);
     provider->source.ptr = reinterpret_cast<void *>(dependencies);
     provider->read_callback = dependency_read_callback;
     // outstanding_dependencies_.erase(url);
@@ -81,27 +83,33 @@ nghttp2_data_provider DependencyReader::GetDependenciesDataProvider(
 }
 
 uint32_t DependencyReader::num_dependencies_remaining(const std::string url) {
-  if (outstanding_dependencies_.count(url) == 0) {
+  std::string escaped_url = RemoveTrailingSlash(url);
+  if (outstanding_dependencies_.count(escaped_url) == 0) {
     return 0;
   }
-  return outstanding_dependencies_[url].size();
+  return outstanding_dependencies_[escaped_url].size();
 }
 
 bool DependencyReader::still_have_dependencies(const std::string url) {
-  return outstanding_dependencies_.count(url) > 0;
+  for (auto it = outstanding_dependencies_.begin(); it != outstanding_dependencies_.end(); ++it) {
+    std::cout << "[dep_reader.cc] dependency_key: " << it->first << std::endl;
+  }
+  std::string escaped_url = RemoveTrailingSlash(url);
+  return outstanding_dependencies_.count(escaped_url) > 0;
 }
 
 void DependencyReader::RegisterForGettingDependencies(const std::string url,
                                                       int32_t stream_id) {
   std::cout << "[dep_reader.cc] Registering url: " << url << std::endl;
-  if (dependencies_.count(url) == 0) {
+  std::string escaped_url = RemoveTrailingSlash(url);
+  if (dependencies_.count(escaped_url) == 0) {
     // There aren't any dependencies for this URL.
     return;
   }
 
-  outstanding_dependencies_[url] = dependencies_[url];
-  outstanding_dependencies_to_stream_id_[url] = stream_id;
-  can_start_notifying_upstream_[url] = false;
+  outstanding_dependencies_[escaped_url] = dependencies_[escaped_url];
+  outstanding_dependencies_to_stream_id_[escaped_url] = stream_id;
+  can_start_notifying_upstream_[escaped_url] = false;
   std::cout << "[dep_reader.cc] outstanding_dependencies_ size: " << outstanding_dependencies_.size() << std::endl;
   for (auto it = outstanding_dependencies_.begin(); it != outstanding_dependencies_.end(); ++it) {
     std::cout << "[dep_reader.cc] key: " << it->first << " size: " << it->second.size() << std::endl;
@@ -121,6 +129,15 @@ std::string DependencyReader::EscapeURL(const std::string url) {
   return result_url;
 }
 
+std::string DependencyReader::RemoveTrailingSlash(const std::string url) {
+  std::string result(url);
+  std::string slash("/");
+  while (result.substr(result.size() - slash.size()) == "/") {
+    result = result.substr(0, result.size() - slash.size());
+  }
+  return result;
+}
+
 //////////////////////////////////////////////////////////////////////////////////
 // Methods for constructing the dependency tree.
 std::map<std::string, std::deque<std::pair<std::string, std::string>>>
@@ -128,16 +145,19 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
       const std::string dependency_directory,
       const std::string url) {
   std::map<std::string, std::deque<std::pair<std::string, std::string>>> result;
-  std::string site_directory = dependency_directory + kDelimeter + url;
+  std::string working_directory_prefix = "/home/vaspol/Research/MobileWebOptimization/page_load_setup/build/bin";
+  std::string site_directory = working_directory_prefix + kDelimeter + dependency_directory + kDelimeter + url;
   std::string dependency_tree_filename = site_directory + kDelimeter + kDependencyTreeFilename;
 
   std::ifstream infile(dependency_tree_filename);
+  std::cout << "[dep_reader.cc] dep filename: " << dependency_tree_filename << std::endl;
   std::string line;
   while (std::getline(infile, line)) {
     std::cout << "[dep_reader.cc] dep line: " << line << std::endl;
     auto dependency_line = TokenizeTree(line);
-    std::string origin = std::get<0>(dependency_line);
-    std::string parent = std::get<1>(dependency_line);
+    // std::string origin = std::get<0>(dependency_line);
+    std::string origin = RemoveTrailingSlash(std::get<1>(dependency_line));
+    std::string parent = RemoveTrailingSlash(std::get<1>(dependency_line));
     std::string dependency = std::get<2>(dependency_line);
     if (result.count(origin) == 0) {
       result.insert(std::make_pair(origin, 
@@ -145,6 +165,9 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
     }
     if (dependency != url)
       result[origin].push_back(std::make_pair(parent, dependency));
+  }
+  for (auto it = result.begin(); it != result.end(); ++it) {
+    std::cout << "key: " << it->first << std::endl;
   }
   return result;
 }

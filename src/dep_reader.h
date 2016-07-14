@@ -76,6 +76,9 @@ class DependencyReader {
   // Returns an escaped url i.e. removed protocol, www.
   std::string EscapeURL(std::string url);
 
+  // Removes the trailing slash from the url.
+  std::string RemoveTrailingSlash(std::string url);
+
   // The directory base that contains the dependency tree.
   std::string base_dependency_directory_;
 
