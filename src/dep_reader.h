@@ -6,7 +6,9 @@
 
 #include <deque>
 #include <functional>
+#include <future>
 #include <string>
+#include <thread>
 
 #include <nghttp2/nghttp2.h>
 
@@ -98,6 +100,7 @@ class DependencyReader {
   // Mapping from the URL to whether the reader can start notifying the upstream of
   // the dependencies.
   std::map<std::string, bool> can_start_notifying_upstream_; 
+
 };
 
 /*

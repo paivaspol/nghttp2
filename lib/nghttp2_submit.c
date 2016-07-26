@@ -174,7 +174,7 @@ static int32_t submit_headers_shared_with_dependencies(nghttp2_session *session,
     item->aux_data.headers.data_prd = *data_prd;
   }
 
-  if (dependencies_prd != NULL && data_prd->read_callback != NULL) {
+  if (dependencies_prd != NULL && dependencies_prd->read_callback != NULL) {
     item->aux_data.headers.dependencies_prd = *dependencies_prd;
   }
 
@@ -684,6 +684,7 @@ int nghttp2_submit_response_with_dependencies(
                         const nghttp2_nv *nva, size_t nvlen,
                         const nghttp2_data_provider *data_prd,
                         const nghttp2_data_provider *dependencies_prd) {
+  printf("[submit] submit response with dependencies\n");
   uint8_t flags;
 
   if (stream_id <= 0) {

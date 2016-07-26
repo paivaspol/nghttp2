@@ -3,11 +3,13 @@
 
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <deque>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -144,10 +146,13 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
   DependencyReader::ReadAndGenerateDependencyTree(
       const std::string dependency_directory,
       const std::string url) {
+  auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
   std::map<std::string, std::deque<std::pair<std::string, std::string>>> result;
   std::string working_directory_prefix = "/home/vaspol/Research/MobileWebOptimization/page_load_setup/build/bin";
   std::string site_directory = working_directory_prefix + kDelimeter + dependency_directory + kDelimeter + url;
   std::string dependency_tree_filename = site_directory + kDelimeter + kDependencyTreeFilename;
+
+  std::cout << "[dep_reader.cc] url: " << url << std::endl;
 
   std::ifstream infile(dependency_tree_filename);
   std::cout << "[dep_reader.cc] dep filename: " << dependency_tree_filename << std::endl;
@@ -169,6 +174,8 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
   for (auto it = result.begin(); it != result.end(); ++it) {
     std::cout << "key: " << it->first << std::endl;
   }
+  auto end = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  std::cout << "[DepReader] Dependency Reader generation: " << start << " " << end << std::endl;
   return result;
 }
 
@@ -209,11 +216,11 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
   // - Fix when all the dependencies are already sent.
   std::cout << "[dep_reader] here (1) " << source << std::endl;
   auto dependencies = static_cast<std::deque<std::pair<std::string, std::string>> *>(source->ptr);
-  std::cout << "[dep_reader] here (2) " << dependencies << " len: " << dependencies->size() << std::endl;
+  // std::cout << "[dep_reader] here (2) " << dependencies << " len: " << dependencies->size() << std::endl;
   auto dependency = dependencies->front();
-  std::cout << "[dep_reader] here (3)" << std::endl;
+  // std::cout << "[dep_reader] here (3)" << std::endl;
   dependencies->pop_front();
-  std::cout << "[dep_reader] here (4)" << std::endl;
+  // std::cout << "[dep_reader] here (4)" << std::endl;
   size_t length_left = length;
   ssize_t parent_length = dependency.first.length();
   ssize_t dependency_length = dependency.second.length();
@@ -227,6 +234,8 @@ ssize_t dependency_read_callback(nghttp2_session *session, int32_t stream_id,
     *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
   }
   // std::cout << "before returning" << std::endl;
+  auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  std::cout << "[DepReader] read callback " << now << " parent: " << dependency.first << " url: " << dependency.second << std::endl;
   return parent_length + dependency_length + 2; // Account for the NULL terminal.
 }
 
