@@ -954,6 +954,7 @@ enum {
   SHRPX_OPTID_CLIENT_PROXY,
   SHRPX_OPTID_CONF,
   SHRPX_OPTID_DAEMON,
+  SHRPX_OPTID_DEPENDENCY_FILENAME,
   SHRPX_OPTID_DH_PARAM_FILE,
   SHRPX_OPTID_ERROR_PAGE,
   SHRPX_OPTID_ERRORLOG_FILE,
@@ -1382,6 +1383,9 @@ int option_lookup_token(const char *name, size_t namelen) {
   case 19:
     switch (name[18]) {
     case 'e':
+      if (util::strieq_l("dependency-filenam", name, 18)) {
+        return SHRPX_OPTID_DEPENDENCY_FILENAME;
+      }
       if (util::strieq_l("no-location-rewrit", name, 18)) {
         return SHRPX_OPTID_NO_LOCATION_REWRITE;
       }
@@ -1740,8 +1744,7 @@ int option_lookup_token(const char *name, size_t namelen) {
   case 41:
     switch (name[40]) {
     case 'e':
-      if (util::strieq_l("tls-ticket-key-memcached-private-key-fil", name,
-                         40)) {
+      if (util::strieq_l("tls-ticket-key-memcached-private-key-fil", name, 40)) {
         return SHRPX_OPTID_TLS_TICKET_KEY_MEMCACHED_PRIVATE_KEY_FILE;
       }
       break;
@@ -1750,8 +1753,7 @@ int option_lookup_token(const char *name, size_t namelen) {
   case 42:
     switch (name[41]) {
     case 'y':
-      if (util::strieq_l("tls-session-cache-memcached-address-famil", name,
-                         41)) {
+      if (util::strieq_l("tls-session-cache-memcached-address-famil", name, 41)) {
         return SHRPX_OPTID_TLS_SESSION_CACHE_MEMCACHED_ADDRESS_FAMILY;
       }
       break;
@@ -1760,8 +1762,7 @@ int option_lookup_token(const char *name, size_t namelen) {
   case 44:
     switch (name[43]) {
     case 'e':
-      if (util::strieq_l("tls-session-cache-memcached-private-key-fil", name,
-                         43)) {
+      if (util::strieq_l("tls-session-cache-memcached-private-key-fil", name, 43)) {
         return SHRPX_OPTID_TLS_SESSION_CACHE_MEMCACHED_PRIVATE_KEY_FILE;
       }
       break;
@@ -2705,6 +2706,10 @@ int parse_config(const StringRef &opt, const StringRef &optarg,
                       opt, optarg);
   case SHRPX_OPTID_ERROR_PAGE:
     return parse_error_page(mod_config()->http.error_pages, opt, optarg);
+  case SHRPX_OPTID_DEPENDENCY_FILENAME:
+    mod_config()->http2.dependency_file = 
+        ImmutableString{std::begin(optarg), std::end(optarg)};
+    return 0;
   case SHRPX_OPTID_CONF:
     LOG(WARN) << "conf: ignored";
 

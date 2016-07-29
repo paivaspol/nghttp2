@@ -75,6 +75,9 @@ constexpr auto SHRPX_OPT_PRIVATE_KEY_PASSWD_FILE =
     StringRef::from_lit("private-key-passwd-file");
 constexpr auto SHRPX_OPT_CERTIFICATE_FILE =
     StringRef::from_lit("certificate-file");
+// ADDITIONAL
+constexpr auto SHRPX_OPT_DEPENDENCY_FILENAME = StringRef::from_lit("dependency-filename");
+// END ADDITIONAL
 constexpr auto SHRPX_OPT_DH_PARAM_FILE = StringRef::from_lit("dh-param-file");
 constexpr auto SHRPX_OPT_SUBCERT = StringRef::from_lit("subcert");
 constexpr auto SHRPX_OPT_BACKEND = StringRef::from_lit("backend");
@@ -555,6 +558,7 @@ struct Http2Config {
   } timeout;
   bool no_cookie_crumbling;
   bool no_server_push;
+  ImmutableString dependency_file;
 };
 
 struct LoggingConfig {

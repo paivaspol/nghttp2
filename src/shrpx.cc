@@ -2541,6 +2541,7 @@ int main(int argc, char **argv) {
         {SHRPX_OPT_BACKEND_CONNECTIONS_PER_HOST.c_str(), required_argument,
          &flag, 121},
         {SHRPX_OPT_ERROR_PAGE.c_str(), required_argument, &flag, 122},
+        {SHRPX_OPT_DEPENDENCY_FILENAME.c_str(), required_argument, &flag, 123},
         {nullptr, 0, nullptr, 0}};
 
     int option_index = 0;
@@ -3115,6 +3116,10 @@ int main(int argc, char **argv) {
       case 122:
         // --error-page
         cmdcfgs.emplace_back(SHRPX_OPT_ERROR_PAGE, StringRef{optarg});
+        break;
+      case 123:
+        // --dependency-file
+        cmdcfgs.emplace_back(SHRPX_OPT_DEPENDENCY_FILENAME, StringRef{optarg});
         break;
       default:
         break;
