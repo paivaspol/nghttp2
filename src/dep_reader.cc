@@ -20,14 +20,26 @@
 namespace shrpx {
 
 DependencyReader::DependencyReader() 
-  : on_new_dependency_callback_(NULL), 
+  : dependency_filename_(""),
+    on_new_dependency_callback_(NULL), 
     base_dependency_directory_("dependencies") {
+}
+
+DependencyReader::DependencyReader(std::string dependency_filename) :
+  dependency_filename_(dependency_filename)
+{
+
 }
 
 DependencyReader::~DependencyReader() { }
 
+void DependencyReader::SetDependencyTreeFilename(const std::string dependency_filename) {
+  dependency_filename_ = dependency_filename;
+}
+
 void DependencyReader::Start(const std::string website) {
   // Reads in the dependency tree from the file.
+  std::cout << "[dep_reader.cc] In Start" << std::endl;
   dependencies_ = ReadAndGenerateDependencyTree(
       base_dependency_directory_, EscapeURL(website));
 }
@@ -146,13 +158,16 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
   DependencyReader::ReadAndGenerateDependencyTree(
       const std::string dependency_directory,
       const std::string url) {
+  std::cout << "[dep_reader.cc] here (1)" << std::endl;
   auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
   std::map<std::string, std::deque<std::pair<std::string, std::string>>> result;
-  std::string working_directory_prefix = "/home/vaspol/Research/MobileWebOptimization/page_load_setup/build/bin";
-  std::string site_directory = working_directory_prefix + kDelimeter + dependency_directory + kDelimeter + url;
-  std::string dependency_tree_filename = site_directory + kDelimeter + kDependencyTreeFilename;
-
-  std::cout << "[dep_reader.cc] url: " << url << std::endl;
+  std::string dependency_tree_filename = dependency_filename_;
+  if (dependency_tree_filename.empty()) {
+    std::string working_directory_prefix = "/home/vaspol/Research/MobileWebOptimization/page_load_setup/build/bin";
+    std::string site_directory = working_directory_prefix + kDelimeter + dependency_directory + kDelimeter;
+    std::string dependency_tree_filename = site_directory + kDelimeter + kDependencyTreeFilename;
+    std::cout << "[dep_reader.cc] url: " << url << std::endl;
+  }
 
   std::ifstream infile(dependency_tree_filename);
   std::cout << "[dep_reader.cc] dep filename: " << dependency_tree_filename << std::endl;
@@ -161,7 +176,7 @@ std::map<std::string, std::deque<std::pair<std::string, std::string>>>
     std::cout << "[dep_reader.cc] dep line: " << line << std::endl;
     auto dependency_line = TokenizeTree(line);
     // std::string origin = std::get<0>(dependency_line);
-    std::string origin = RemoveTrailingSlash(std::get<1>(dependency_line));
+    std::string origin = RemoveTrailingSlash(std::get<0>(dependency_line));
     std::string parent = RemoveTrailingSlash(std::get<1>(dependency_line));
     std::string dependency = std::get<2>(dependency_line);
     if (result.count(origin) == 0) {

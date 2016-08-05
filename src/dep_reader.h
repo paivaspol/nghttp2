@@ -18,7 +18,10 @@ class DependencyReader {
 
  public:
   DependencyReader();
+  DependencyReader(std::string dependency_filename);
   ~DependencyReader();
+
+  void SetDependencyTreeFilename(std::string dependency_filename);
 
   /*
    * Starts the DependencyReader, but all the callbacks are not enabled unless 
@@ -64,6 +67,8 @@ class DependencyReader {
   const std::string kWwwPrefix = "www.";
   const std::string kDependencyTreeFilename = "dependency_tree.txt";
   const std::string kDelimeter = "/";
+
+  std::string dependency_filename_;
 
   // Returns a map containing the dependency tree.
   std::map<std::string, std::deque<std::pair<std::string, std::string>>>

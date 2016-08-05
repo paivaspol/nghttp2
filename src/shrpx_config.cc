@@ -42,6 +42,8 @@
 #include <unistd.h>
 #endif // HAVE_UNISTD_H
 
+#include <iostream>
+
 #include <cstring>
 #include <cerrno>
 #include <limits>
@@ -2707,8 +2709,9 @@ int parse_config(const StringRef &opt, const StringRef &optarg,
   case SHRPX_OPTID_ERROR_PAGE:
     return parse_error_page(mod_config()->http.error_pages, opt, optarg);
   case SHRPX_OPTID_DEPENDENCY_FILENAME:
-    mod_config()->http2.dependency_file = 
+    mod_config()->http2.dependency_filename = 
         ImmutableString{std::begin(optarg), std::end(optarg)};
+    std::cout << "[Config.cc] " << mod_config()->http2.dependency_filename << std::endl;
     return 0;
   case SHRPX_OPTID_CONF:
     LOG(WARN) << "conf: ignored";

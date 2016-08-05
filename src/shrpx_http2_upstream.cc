@@ -335,6 +335,7 @@ int Http2Upstream::on_request_headers(Downstream *downstream,
   }
 
   if (path) {
+    std::cout << "[upstream] Path: " << path << std::endl;
     if (method_token == HTTP_OPTIONS &&
         path->value == StringRef::from_lit("*")) {
       // Server-wide OPTIONS request.  Path is empty.
@@ -379,23 +380,16 @@ int Http2Upstream::on_request_headers(Downstream *downstream,
   }
 
   // ADDITIONAL
-  // dep_reader_.set_url(req.path);
   auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
   std::cout << "[Upstream] url: " << construct_url(req) << " requesting dependencies: " << (frame->hd.flags & NGHTTP2_FLAG_REQUESTING_DEPENDENCIES) << " on stream " << frame->hd.stream_id << " time: " << now << std::endl;
   std::cout << "[Upstream] path: " << req.path << std::endl;
-  if (req.path == "/") {
-  // if (req.path.str().compare(req.path.str().length() - 1, 1, "/")  == 0) { // TODO: This is incorrect. There are cases where the first page will be "http://foo.com/index.html".
-    dep_reader_.Start(req.authority.str());
-    // dep_reader_.Start(req.authority.str() + req.path.str());
-  }
-  // if (req.path == "/") {
-  //   did_sent_dependency_ = false;
-  // } else { 
-  //   nghttp2_session_set_still_have_dependencies(session_, frame->hd.stream_id, 0);
-  // }
+  std::cout << "[Upstream] Dependency Filename " << get_config()->http2.dependency_filename << std::endl;
   if (frame->hd.flags & NGHTTP2_FLAG_REQUESTING_DEPENDENCIES) {
+    std::cout << "[Upstream] Before start" << std::endl;
+    dep_reader_.Start(req.authority.str());
     start_resolving_dependencies(construct_url(req), downstream->get_stream_id());
   }
+  std::cout << "[Upstream] After if" << std::endl;
   // END ADDITIONAL
 
   start_downstream(downstream);
@@ -963,6 +957,10 @@ Http2Upstream::Http2Upstream(ClientHandler *handler)
                 this,
                 std::placeholders::_1,
                 std::placeholders::_2));
+
+  if (!get_config()->http2.dependency_filename.empty()) {
+    dep_reader_.SetDependencyTreeFilename(std::string(get_config()->http2.dependency_filename.c_str()));
+  }
   // END ADDITIONAL
 }
 

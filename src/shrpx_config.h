@@ -558,7 +558,7 @@ struct Http2Config {
   } timeout;
   bool no_cookie_crumbling;
   bool no_server_push;
-  ImmutableString dependency_file;
+  ImmutableString dependency_filename;
 };
 
 struct LoggingConfig {
