@@ -2763,8 +2763,8 @@ static int session_after_frame_sent1(nghttp2_session *session) {
             return rv;
           }
       } else if (aux_data->data_prd.read_callback) {
-          // rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
-          //                          frame->hd.stream_id, &aux_data->data_prd);
+          rv = nghttp2_submit_data(session, NGHTTP2_FLAG_END_STREAM,
+                                   frame->hd.stream_id, &aux_data->data_prd);
           if (nghttp2_is_fatal(rv)) {
             return rv;
           }
